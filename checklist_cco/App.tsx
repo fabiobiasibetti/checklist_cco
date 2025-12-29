@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
@@ -22,7 +22,6 @@ const AppContent = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [locations, setLocations] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [syncError, setSyncError] = useState<string | null>(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
@@ -33,22 +32,9 @@ const AppContent = () => {
     if (!user.accessToken) return;
     (window as any).__access_token = user.accessToken; 
     setIsLoading(true);
-    setSyncError(null);
-    
     try {
-      // 1. Validação inicial: Tenta encontrar as listas. Se falhar aqui, já para tudo.
-      await SharePointService.validateConnection(user.accessToken);
-
-      // 2. Busca os dados
-      const [spTasks, spOps] = await Promise.all([
-        SharePointService.getTasks(user.accessToken),
-        SharePointService.getOperations(user.accessToken, user.email)
-      ]);
-
-      if (spOps.length === 0) {
-          throw new Error(`Seu e-mail (${user.email}) não está vinculado a nenhuma operação na lista 'Operacoes_Checklist'.`);
-      }
-
+      const spTasks = await SharePointService.getTasks(user.accessToken);
+      const spOps = await SharePointService.getOperations(user.accessToken, user.email);
       const today = new Date().toISOString().split('T')[0];
       const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
 
@@ -58,8 +44,7 @@ const AppContent = () => {
       const matrixTasks: Task[] = spTasks.map(t => {
         const ops: Record<string, any> = {};
         opSiglas.forEach(sigla => {
-          const matchedStatuses = spStatus.filter(s => s.TarefaID === t.id && s.OperacaoSigla === sigla);
-          const statusMatch = matchedStatuses.length > 0 ? matchedStatuses[matchedStatuses.length - 1] : null;
+          const statusMatch = spStatus.find(s => s.TarefaID === t.id && s.OperacaoSigla === sigla);
           ops[sigla] = statusMatch ? statusMatch.Status : 'PR';
         });
 
@@ -77,9 +62,8 @@ const AppContent = () => {
       });
 
       setTasks(matrixTasks.filter(t => t.active !== false));
-    } catch (err: any) {
-      console.error("Erro crítico de sincronização:", err);
-      setSyncError(err.message || "Erro desconhecido ao conectar com SharePoint.");
+    } catch (err) {
+      console.error("Erro ao carregar SharePoint:", err);
     } finally {
       setIsLoading(false);
     }
@@ -125,35 +109,6 @@ const AppContent = () => {
           <div className="h-full flex items-center justify-center flex-col gap-4 text-blue-600">
              <Loader2 size={40} className="animate-spin" />
              <p className="font-bold animate-pulse">Sincronizando com SharePoint...</p>
-          </div>
-        ) : syncError ? (
-          <div className="h-full flex items-center justify-center p-8">
-            <div className="bg-white dark:bg-slate-900 p-10 rounded-[2.5rem] shadow-xl border dark:border-slate-800 max-w-xl w-full text-center flex flex-col items-center">
-                <div className="w-20 h-20 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-3xl flex items-center justify-center mb-6">
-                    <AlertTriangle size={40} />
-                </div>
-                <h2 className="text-2xl font-black text-slate-800 dark:text-white mb-4 uppercase tracking-tight">Falha na Sincronização</h2>
-                <div className="bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/50 p-4 rounded-2xl text-red-600 dark:text-red-400 text-sm font-medium mb-8 text-left w-full">
-                    {syncError}
-                </div>
-                <div className="flex flex-col gap-3 w-full">
-                    <button 
-                        onClick={() => loadDataFromSharePoint(currentUser)}
-                        className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95"
-                    >
-                        <RefreshCw size={20} /> Tentar Novamente
-                    </button>
-                    <button 
-                        onClick={handleLogout}
-                        className="w-full py-4 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-all"
-                    >
-                        Sair da Conta
-                    </button>
-                </div>
-                <p className="mt-8 text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">
-                    Certifique-se de que a lista <b>Status_Checklist</b> existe no site CCO e que você possui permissões de edição.
-                </p>
-            </div>
           </div>
         ) : (
           <Routes>
