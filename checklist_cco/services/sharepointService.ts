@@ -86,6 +86,15 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
+  async getListMetadata(token: string, listName: string): Promise<{ lastModifiedDateTime: string; id: string }> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, listName, token);
+    return {
+      lastModifiedDateTime: list.lastModifiedDateTime,
+      id: list.id
+    };
+  },
+
   async getTasks(token: string): Promise<SPTask[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -179,9 +188,9 @@ export const SharePointService = {
     const listName = 'Historico_checklist_web';
     const list = await findListByIdOrName(siteId, listName, token);
 
-    // Mapeamento forçado baseado no diagnóstico real da lista
+    const prefix = record.isPartial ? "[PARCIAL] " : "";
     const fields: any = {
-      Title: record.resetBy, // Grava Responsável no campo Título (Title)
+      Title: prefix + (record.resetBy || "SISTEMA"), 
       Data: record.timestamp,
       DadosJSON: JSON.stringify(record.tasks),
       Celula: record.email
@@ -204,13 +213,37 @@ export const SharePointService = {
       const filter = `fields/Celula eq '${userEmail}'`;
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
       
-      return (data.value || []).map((item: any) => ({
-        id: item.fields.id || item.id,
-        timestamp: item.fields.Data,
-        resetBy: item.fields.Title, // Responsável está no Title
-        email: item.fields.Celula,
-        tasks: JSON.parse(item.fields.DadosJSON || '[]')
-      })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      return (data.value || []).map((item: any) => {
+        const title = item.fields.Title || "";
+        const isPartial = title.startsWith("[PARCIAL]");
+        return {
+          id: item.fields.id || item.id,
+          timestamp: item.fields.Data,
+          resetBy: isPartial ? title.replace("[PARCIAL] ", "") : title,
+          isPartial: isPartial,
+          email: item.fields.Celula,
+          tasks: JSON.parse(item.fields.DadosJSON || '[]')
+        };
+      }).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     } catch (e) { return []; }
+  },
+
+  async getRegisteredUsers(token: string, email: string): Promise<string[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'Usuarios_cco', token);
+      const mapping = await getListColumnMapping(siteId, list.id, token);
+      
+      const colEmail = resolveFieldName(mapping, 'Email');
+      const colNome = resolveFieldName(mapping, 'Nome');
+      
+      const filter = `fields/${colEmail} eq '${email}'`;
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+      
+      return (data.value || []).map((item: any) => item.fields[colNome] || "").filter(Boolean);
+    } catch (e) {
+      console.error("Erro ao buscar usuários cadastrados:", e);
+      return [];
+    }
   }
 };

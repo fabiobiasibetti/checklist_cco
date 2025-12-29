@@ -1,8 +1,8 @@
 
 import { HistoryRecord, Task, User as AppUser } from '../types';
 import { SharePointService } from '../services/sharepointService';
-import { History, Calendar, Clock, ChevronRight, ChevronDown, CheckCircle2, User, Loader2, MapPin } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import { History, Calendar, Clock, ChevronRight, ChevronDown, CheckCircle2, User, Loader2, MapPin, ExternalLink, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 const STATUS_CONFIG: Record<string, { label: string, color: string }> = {
   'PR': { label: 'PR', color: 'bg-slate-200 text-slate-600 border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600' },
@@ -35,7 +35,9 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
         try {
             const data = await SharePointService.getHistory(token, currentUser.email);
             setHistory(data);
-            if (data.length > 0) setSelectedRecord(data[0]);
+            // Seleciona o primeiro registro não-parcial por padrão (o reset do dia)
+            const mainRecord = data.find(r => !r.isPartial) || data[0];
+            if (mainRecord) setSelectedRecord(mainRecord);
         } catch (e) {
             console.error("Erro ao carregar histórico:", e);
         } finally {
@@ -48,7 +50,6 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
   const displayTimestamp = (timestamp: string) => {
     try {
         if (!timestamp) return "--/--/---- --:--";
-        if (timestamp.includes('/')) return timestamp; 
         const date = new Date(timestamp);
         return date.toLocaleString('pt-BR');
     } catch(e) {
@@ -77,6 +78,20 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
       return Array.from(new Set(tasks.flatMap(t => Object.keys(t.operations))));
   };
 
+  // Lógica para encontrar o parcial correspondente ao registro atual
+  const findPartialForRecord = (mainRecord: HistoryRecord) => {
+    if (mainRecord.isPartial) return null;
+    const dateStr = mainRecord.timestamp.split('T')[0];
+    return history.find(h => h.isPartial && h.timestamp.startsWith(dateStr));
+  };
+
+  // Filtrar apenas resets principais para a barra lateral, mas permitindo ver parciais avulsos se necessário
+  const sidebarItems = useMemo(() => {
+    // Se um registro é parcial, ele "pertence" a um reset do mesmo dia.
+    // Mostramos os Resets (Totais) na lista principal.
+    return history.filter(r => !r.isPartial || !history.some(h => !h.isPartial && h.timestamp.split('T')[0] === r.timestamp.split('T')[0]));
+  }, [history]);
+
   const fontSize = 'text-[10px]';
   const categorySize = 'text-[11px] py-1';
   const actionColWidth = 'min-w-[200px] w-[30%]';
@@ -102,39 +117,69 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
             <div className="text-center text-gray-400 dark:text-gray-500 py-8 text-sm">
               Nenhum registro encontrado.
             </div>
-          ) : history.map(record => (
-            <button
-              key={record.id}
-              onClick={() => setSelectedRecord(record)}
-              className={`w-full text-left p-3 rounded-xl transition-all border flex flex-col gap-2
-                ${selectedRecord?.id === record.id 
-                  ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 shadow-sm' 
-                  : 'bg-white dark:bg-slate-900 border-transparent hover:bg-gray-50 dark:hover:bg-slate-800 hover:border-gray-200 dark:hover:border-slate-700'
-                }
-              `}
-            >
-              <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-lg ${selectedRecord?.id === record.id ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-gray-500'}`}>
-                    <Calendar size={16} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className={`font-bold text-xs ${selectedRecord?.id === record.id ? 'text-blue-900 dark:text-blue-200' : 'text-gray-700 dark:text-gray-300'}`}>
-                       {displayTimestamp(record.timestamp).split(' ')[0]}
+          ) : sidebarItems.map(record => {
+            const hasPartial = findPartialForRecord(record);
+            const isSelected = selectedRecord?.id === record.id;
+            
+            return (
+                <button
+                key={record.id}
+                onClick={() => setSelectedRecord(record)}
+                className={`w-full text-left p-3 rounded-xl transition-all border flex flex-col gap-2 relative
+                    ${isSelected 
+                    ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 shadow-sm' 
+                    : 'bg-white dark:bg-slate-900 border-transparent hover:bg-gray-50 dark:hover:bg-slate-800 hover:border-gray-200 dark:hover:border-slate-700'
+                    }
+                `}
+                >
+                <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-slate-800 text-gray-400 dark:text-gray-500'}`}>
+                        <Calendar size={16} />
                     </div>
-                    <div className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
-                       <Clock size={10} />
-                       {displayTimestamp(record.timestamp).split(' ')[1]}
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                            <div className={`font-bold text-xs ${isSelected ? 'text-blue-900 dark:text-blue-200' : 'text-gray-700 dark:text-gray-300'}`}>
+                                {displayTimestamp(record.timestamp).split(' ')[0]}
+                            </div>
+                            {record.isPartial && (
+                                <span className="bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 text-[8px] px-1.5 py-0.5 rounded font-black uppercase border border-amber-200 dark:border-amber-800">
+                                    PARCIAL
+                                </span>
+                            )}
+                        </div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                            <Clock size={10} />
+                            {displayTimestamp(record.timestamp).split(' ')[1]}
+                        </div>
                     </div>
-                  </div>
-              </div>
-              <div className="flex items-center gap-2 px-2 py-1 bg-black/5 dark:bg-white/5 rounded-lg">
-                  <User size={12} className="text-slate-400" />
-                  <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 truncate">
-                      {record.resetBy || 'Desconhecido'}
-                  </span>
-              </div>
-            </button>
-          ))}
+
+                    {/* LOCAL MARCADO NA PRINT: Onde aparece o botão para ver parcial */}
+                    {hasPartial && isSelected && (
+                        <div className="absolute top-3 right-3 animate-in fade-in slide-in-from-right-2 duration-300">
+                             <button 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedRecord(hasPartial);
+                                }}
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[9px] font-black uppercase shadow-md transition-all active:scale-95 border border-amber-400"
+                                title="Ver snapshot das 10:00h"
+                             >
+                                <Sparkles size={10} />
+                                Ver Parcial
+                             </button>
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-2 px-2 py-1 bg-black/5 dark:bg-white/5 rounded-lg">
+                    <User size={12} className="text-slate-400" />
+                    <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 truncate">
+                        {record.resetBy || 'Desconhecido'}
+                    </span>
+                </div>
+                </button>
+            );
+          })}
         </div>
       </div>
 
@@ -147,14 +192,14 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
            </div>
         ) : (
           <>
-            <div className="p-4 bg-gray-50 dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className={`p-4 border-b border-gray-200 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 ${selectedRecord.isPartial ? 'bg-amber-50/50 dark:bg-amber-900/10' : 'bg-gray-50 dark:bg-slate-800'}`}>
                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-                      <User size={24} />
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg ${selectedRecord.isPartial ? 'bg-amber-600 shadow-amber-500/20' : 'bg-blue-600 shadow-blue-500/20'}`}>
+                      {selectedRecord.isPartial ? <Sparkles size={24} /> : <User size={24} />}
                   </div>
                   <div>
-                    <h3 className="font-black text-gray-800 dark:text-white text-sm uppercase tracking-tight">
-                        Responsável: {selectedRecord.resetBy || 'Não informado'}
+                    <h3 className="font-black text-gray-800 dark:text-white text-sm uppercase tracking-tight flex items-center gap-2">
+                        {selectedRecord.isPartial ? 'Snapshot de Turno (10:00h)' : `Responsável: ${selectedRecord.resetBy || 'Não informado'}`}
                     </h3>
                     <div className="flex items-center gap-3 mt-1">
                         <span className="text-[10px] flex items-center gap-1 text-slate-500 font-bold uppercase">
@@ -166,18 +211,31 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                     </div>
                   </div>
                </div>
-               <div className="px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-full text-[10px] font-black uppercase border border-green-200 dark:border-green-800">
-                   Snapshot Recuperado
+               
+               {selectedRecord.isPartial && (
+                    <button 
+                        onClick={() => {
+                            const mainRes = history.find(h => !h.isPartial && h.timestamp.split('T')[0] === selectedRecord.timestamp.split('T')[0]);
+                            if (mainRes) setSelectedRecord(mainRes);
+                        }}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-[10px] font-black uppercase hover:bg-blue-700 transition-all"
+                    >
+                        <ExternalLink size={12} /> Voltar ao Reset
+                    </button>
+               )}
+               
+               <div className={`px-3 py-1 rounded-full text-[10px] font-black uppercase border ${selectedRecord.isPartial ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800' : 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 border-green-200 dark:border-green-800'}`}>
+                   {selectedRecord.isPartial ? 'Status Parcial' : 'Reset Finalizado'}
                </div>
             </div>
 
             <div className="flex-1 overflow-auto bg-slate-50 dark:bg-slate-950 scrollbar-thin">
                 <table className={`w-full border-collapse bg-white dark:bg-slate-900 ${fontSize}`}>
-                  <thead className="sticky top-0 z-20 bg-slate-800 dark:bg-slate-950 text-white shadow-lg">
+                  <thead className={`sticky top-0 z-20 text-white shadow-lg ${selectedRecord.isPartial ? 'bg-amber-700 dark:bg-slate-950' : 'bg-slate-800 dark:bg-slate-950'}`}>
                     <tr>
-                      <th className={`p-2 text-left ${actionColWidth} border-r border-slate-700 dark:border-slate-800 sticky left-0 bg-slate-800 dark:bg-slate-950 z-30 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)] font-black uppercase tracking-widest text-[9px]`}>AÇÃO / TAREFA</th>
+                      <th className={`p-2 text-left ${actionColWidth} border-r border-white/10 sticky left-0 z-30 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.3)] font-black uppercase tracking-widest text-[9px] ${selectedRecord.isPartial ? 'bg-amber-700 dark:bg-slate-950' : 'bg-slate-800 dark:bg-slate-950'}`}>AÇÃO / TAREFA</th>
                       {getAllLocations(selectedRecord.tasks).map(loc => (
-                        <th key={loc} className={`p-1 text-center min-w-[45px] border-r border-slate-700 dark:border-slate-800 font-bold ${fontSize}`}>
+                        <th key={loc} className={`p-1 text-center min-w-[45px] border-r border-white/10 font-bold ${fontSize}`}>
                             {loc.replace('LAT-', '').replace('ITA-', '')}
                         </th>
                       ))}
@@ -196,10 +254,10 @@ const HistoryViewer: React.FC<HistoryViewerProps> = ({ currentUser }) => {
                             return (
                                 <React.Fragment key={category}>
                                     <tr 
-                                        className={`bg-slate-600 dark:bg-slate-800 text-white font-bold uppercase tracking-widest cursor-pointer hover:bg-slate-700 dark:hover:bg-slate-700 transition-colors ${categorySize}`}
+                                        className={`text-white font-bold uppercase tracking-widest cursor-pointer transition-colors ${categorySize} ${selectedRecord.isPartial ? 'bg-amber-600 dark:bg-amber-900/50 hover:bg-amber-700' : 'bg-slate-600 dark:bg-slate-800 hover:bg-slate-700'}`}
                                         onClick={() => toggleCategory(category)}
                                     >
-                                        <td colSpan={1 + locs.length} className={`px-3 border-y border-slate-700 dark:border-slate-900 sticky left-0 z-10 text-[9px]`}>
+                                        <td colSpan={1 + locs.length} className={`px-3 border-y border-white/10 sticky left-0 z-10 text-[9px]`}>
                                             <div className="flex items-center gap-2">
                                                 {isCollapsed ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}
                                                 {category}

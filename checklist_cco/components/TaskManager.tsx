@@ -7,7 +7,7 @@ import {
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
   Activity, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
-  RotateCcw, Save
+  RotateCcw, Save, UserCheck
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string, color: string, next: OperationStatus, shortcut: string, desc: string }> = {
@@ -29,6 +29,8 @@ interface TaskManagerProps {
   setCollapsedCategories: any;
   currentUser: User;
   onLogout: () => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
 const TaskManager: React.FC<TaskManagerProps> = ({ 
@@ -39,14 +41,18 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   setCollapsedCategories,
   onUserSwitch, 
   currentUser,
-  onLogout
+  onLogout,
+  onInteractionStart,
+  onInteractionEnd
 }) => {
   const [activeTool, setActiveTool] = useState<OperationStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [compact, setCompact] = useState(true);
   
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
-  const [resetResponsible, setResetResponsible] = useState(currentUser.name || '');
+  const [resetResponsible, setResetResponsible] = useState('');
+  const [registeredUsers, setRegisteredUsers] = useState<string[]>([]);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
   const paintedThisDrag = useRef<Set<string>>(new Set());
@@ -91,15 +97,16 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     const handleMouseUp = () => {
       setIsDragging(false);
       paintedThisDrag.current.clear();
+      onInteractionEnd?.(); // Libera sincronização
     };
     window.addEventListener('mouseup', handleMouseUp);
     return () => window.removeEventListener('mouseup', handleMouseUp);
-  }, []);
+  }, [onInteractionEnd]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
       switch (e.key) {
         case '1': setActiveTool('OK'); break;
         case '2': setActiveTool('EA'); break;
@@ -114,10 +121,30 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const handleOpenResetModal = async () => {
+    setIsResetModalOpen(true);
+    setIsLoadingUsers(true);
+    try {
+        const token = currentUser.accessToken || (window as any).__access_token;
+        if (token) {
+            const users = await SharePointService.getRegisteredUsers(token, currentUser.email);
+            setRegisteredUsers(users);
+            if (users.length === 1) {
+                setResetResponsible(users[0]);
+            } else {
+                setResetResponsible('');
+            }
+        }
+    } catch (e) {
+        console.error("Erro ao carregar usuários:", e);
+    } finally {
+        setIsLoadingUsers(false);
+    }
+  };
+
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
     if (!currentUser.accessToken) return;
     
-    // Otimista: Atualiza UI antes
     const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
@@ -141,7 +168,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     } catch (err: any) {
       console.error(`Erro ao sincronizar:`, err);
       alert(`Falha ao salvar no SharePoint: ${err.message}`);
-      // Rollback se falhar
       setTasks(originalTasks);
     } finally {
       setIsUpdating(false);
@@ -151,6 +177,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const handlePaintRow = async (taskId: string) => {
     if (!activeTool || !currentUser.accessToken) return;
     
+    onInteractionStart?.();
     const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
@@ -178,6 +205,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       setTasks(originalTasks);
     } finally {
       setIsUpdating(false);
+      onInteractionEnd?.();
     }
   };
 
@@ -186,7 +214,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     
     setIsUpdating(true);
     try {
-        // 1. Salvar Snapshot no Histórico
         await SharePointService.saveHistory(currentUser.accessToken, {
             id: Date.now().toString(),
             timestamp: new Date().toISOString(),
@@ -195,7 +222,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
             email: currentUser.email
         });
         
-        // 2. Limpar status do dia atual
         const today = new Date().toISOString().split('T')[0];
         const todayKey = today.replace(/-/g, '');
         
@@ -317,7 +343,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
           <div className="flex items-center gap-1">
             <button 
-              onClick={() => setIsResetModalOpen(true)}
+              onClick={handleOpenResetModal}
               className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-all border border-amber-100 dark:border-amber-800 shadow-sm"
               title="Resetar Checklist e Salvar no SharePoint"
             >
@@ -355,22 +381,57 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                 </div>
                 <div className="p-6 bg-gray-50 dark:bg-slate-900">
                     <div className="mb-6">
-                        <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2">Responsável pelo Reset:</label>
-                        <input 
-                            type="text"
-                            value={resetResponsible}
-                            onChange={(e) => setResetResponsible(e.target.value)}
-                            className="w-full p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm dark:text-white focus:ring-2 focus:ring-amber-500 outline-none"
-                            placeholder="Seu nome completo..."
-                            autoFocus
-                        />
+                        <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2">Quem está realizando o reset?</label>
+                        
+                        <div className="relative">
+                            {isLoadingUsers ? (
+                                <div className="flex items-center gap-2 p-3 bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-xl text-slate-400 text-sm italic">
+                                    <Loader2 size={16} className="animate-spin" /> Buscando nomes cadastrados...
+                                </div>
+                            ) : registeredUsers.length > 0 ? (
+                                <select 
+                                    value={resetResponsible}
+                                    onChange={(e) => setResetResponsible(e.target.value)}
+                                    className="w-full p-3 pr-10 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm dark:text-white focus:ring-2 focus:ring-amber-500 outline-none appearance-none font-bold shadow-sm"
+                                    autoFocus
+                                >
+                                    <option value="">Selecione seu nome...</option>
+                                    {registeredUsers.map(name => (
+                                        <option key={name} value={name}>{name}</option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded-xl text-red-600 dark:text-red-400 text-xs flex flex-col gap-2">
+                                    <div className="flex items-center gap-2 font-bold uppercase">
+                                        <AlertCircle size={16} /> Usuário não autorizado
+                                    </div>
+                                    <p className="opacity-80">Nenhum nome encontrado para o e-mail: <b>{currentUser.email}</b> na lista 'Usuarios_cco'.</p>
+                                </div>
+                            )}
+                            {!isLoadingUsers && registeredUsers.length > 0 && (
+                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                                    <ChevronDown size={18} />
+                                </div>
+                            )}
+                        </div>
                     </div>
-                    <div className="flex gap-3">
-                        <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-3 bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-gray-200 font-bold rounded-xl">Cancelar</button>
-                        <button onClick={handleResetChecklist} disabled={!resetResponsible.trim() || isUpdating} className="flex-[2] py-3 bg-amber-600 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50">
+
+                    <div className="flex gap-3 mt-8">
+                        <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-3 bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-gray-200 font-bold rounded-xl hover:bg-gray-300 dark:hover:bg-slate-600 transition-colors">Cancelar</button>
+                        <button 
+                            onClick={handleResetChecklist} 
+                            disabled={!resetResponsible.trim() || isUpdating || isLoadingUsers} 
+                            className="flex-[2] py-3 bg-amber-600 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transition-all hover:bg-amber-700 active:scale-95"
+                        >
                             {isUpdating ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
-                            Confirmar e Salvar Nuvem
+                            Confirmar Reset
                         </button>
+                    </div>
+                    
+                    <div className="mt-4 text-center">
+                        <p className="text-[10px] text-slate-400 font-medium italic">
+                            O histórico será vinculado ao acesso corporativo logado.
+                        </p>
                     </div>
                 </div>
              </div>
@@ -452,6 +513,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                                 key={loc} 
                                 className="p-0 border-r border-slate-100 dark:border-slate-800 h-12 relative" 
                                 onMouseDown={() => {
+                                    onInteractionStart?.();
                                     setIsDragging(true);
                                     onCellInteraction(task.id, loc);
                                     paintedThisDrag.current.add(`${task.id}-${loc}`);
