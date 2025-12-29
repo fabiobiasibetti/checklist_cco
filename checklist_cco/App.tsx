@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
+import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, RefreshCw, PauseCircle } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
@@ -23,13 +23,15 @@ const AppContent = () => {
   const [locations, setLocations] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncPaused, setIsSyncPaused] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
   
   const partialSaveAttemptedRef = useRef(false);
   const lastListTimestampRef = useRef<string | null>(null);
-  const isSyncBlockedRef = useRef(false); // Bloqueia sync enquanto usuário interage
+  const isSyncBlockedRef = useRef(false);
+  const cooldownTimeoutRef = useRef<number | null>(null);
   
   const navigate = useNavigate();
 
@@ -43,7 +45,6 @@ const AppContent = () => {
       const today = new Date().toISOString().split('T')[0];
       const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
 
-      // Armazena timestamp inicial para o polling
       const meta = await SharePointService.getListMetadata(user.accessToken, 'Status_Checklist');
       lastListTimestampRef.current = meta.lastModifiedDateTime;
 
@@ -70,11 +71,10 @@ const AppContent = () => {
         };
       });
 
-      const activeTasks = matrixTasks.filter(t => t.active !== false);
-      setTasks(activeTasks);
+      setTasks(matrixTasks.filter(t => t.active !== false));
 
       if (!partialSaveAttemptedRef.current) {
-        checkAndTriggerPartialSave(user, activeTasks);
+        checkAndTriggerPartialSave(user, matrixTasks.filter(t => t.active !== false));
         partialSaveAttemptedRef.current = true;
       }
     } catch (err) {
@@ -84,26 +84,21 @@ const AppContent = () => {
     }
   };
 
-  // Polling de sincronização em tempo real otimizado
+  // Sincronização de fundo com proteção contra reversão
   useEffect(() => {
     if (!currentUser?.accessToken || isLoading) return;
 
     const syncInterval = setInterval(async () => {
-      // Se o app estiver processando algo ou bloqueado por interação, pula o ciclo
       if (isSyncing || isSyncBlockedRef.current) return;
 
       try {
         const meta = await SharePointService.getListMetadata(currentUser.accessToken!, 'Status_Checklist');
         
-        // Só busca os dados se o timestamp de modificação da lista mudou
         if (meta.lastModifiedDateTime !== lastListTimestampRef.current) {
-          console.log("Alteração detectada no SharePoint. Sincronizando...");
           setIsSyncing(true);
-          
           const today = new Date().toISOString().split('T')[0];
           const newSpStatus = await SharePointService.getStatusByDate(currentUser.accessToken!, today);
           
-          // Atualiza o estado mesclando apenas as mudanças de status
           setTasks(prevTasks => prevTasks.map(task => {
             const updatedOps = { ...task.operations };
             let hasChanged = false;
@@ -111,7 +106,6 @@ const AppContent = () => {
             locations.forEach(sigla => {
               const statusMatch = newSpStatus.find(s => s.TarefaID === task.id && s.OperacaoSigla === sigla);
               const newStatus = statusMatch ? statusMatch.Status : 'PR';
-              
               if (updatedOps[sigla] !== newStatus) {
                 updatedOps[sigla] = newStatus;
                 hasChanged = true;
@@ -125,37 +119,51 @@ const AppContent = () => {
           setIsSyncing(false);
         }
       } catch (e) {
-        console.warn("Falha no background sync:", e);
         setIsSyncing(false);
       }
-    }, 5000); // 5 segundos para um balanço ideal entre performance e "tempo real"
+    }, 5000);
 
     return () => clearInterval(syncInterval);
   }, [currentUser, isLoading, isSyncing, locations]);
 
+  // Função chamada pelo TaskManager após um salvamento manual com sucesso
+  const handleManualSaveComplete = async () => {
+    if (!currentUser?.accessToken) return;
+    
+    // 1. Mantém o bloqueio por um tempo de segurança (cooldown)
+    isSyncBlockedRef.current = true;
+    setIsSyncPaused(true);
+
+    if (cooldownTimeoutRef.current) window.clearTimeout(cooldownTimeoutRef.current);
+
+    try {
+        // 2. Busca o novo timestamp IMEDIATAMENTE para "consumir" a própria alteração
+        const meta = await SharePointService.getListMetadata(currentUser.accessToken, 'Status_Checklist');
+        lastListTimestampRef.current = meta.lastModifiedDateTime;
+    } catch (e) {}
+
+    // 3. Libera o sync após 3 segundos (tempo para o SharePoint estabilizar)
+    cooldownTimeoutRef.current = window.setTimeout(() => {
+        isSyncBlockedRef.current = false;
+        setIsSyncPaused(false);
+        cooldownTimeoutRef.current = null;
+    }, 3000);
+  };
+
   const checkAndTriggerPartialSave = async (user: User, currentTasks: Task[]) => {
     const now = new Date();
     const hours = now.getHours();
-    
     if (hours >= 10 && hours < 22) {
         try {
             const history = await SharePointService.getHistory(user.accessToken!, user.email);
             const todayStr = now.toISOString().split('T')[0];
             const alreadyHasPartial = history.some(h => h.isPartial && h.timestamp.startsWith(todayStr));
-
             if (!alreadyHasPartial && currentTasks.length > 0) {
                 await SharePointService.saveHistory(user.accessToken!, {
-                    id: `partial_${Date.now()}`,
-                    timestamp: now.toISOString(),
-                    tasks: currentTasks,
-                    resetBy: user.name,
-                    email: user.email,
-                    isPartial: true
+                    id: `partial_${Date.now()}`, timestamp: now.toISOString(), tasks: currentTasks, resetBy: user.name, email: user.email, isPartial: true
                 });
             }
-        } catch (e) {
-            console.error("Falha no snapshot de 10h:", e);
-        }
+        } catch (e) {}
     }
   };
 
@@ -186,10 +194,9 @@ const AppContent = () => {
           <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
         </nav>
         
-        {/* Status de Sincronização na Sidebar */}
-        <div className={`mt-auto mb-4 p-2 rounded-lg flex items-center justify-center gap-2 ${isSyncing ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'text-slate-400'}`}>
-            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
-            {!collapsed && <span className="text-[10px] font-bold uppercase tracking-tighter">{isSyncing ? 'Sincronizando' : 'Em Nuvem'}</span>}
+        <div className={`mt-auto mb-4 p-2 rounded-lg flex items-center justify-center gap-2 transition-colors ${isSyncPaused ? 'text-amber-500 bg-amber-50 dark:bg-amber-900/20' : isSyncing ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'text-slate-400'}`}>
+            {isSyncPaused ? <PauseCircle size={14} /> : <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />}
+            {!collapsed && <span className="text-[10px] font-bold uppercase tracking-tighter">{isSyncPaused ? 'Pausa Segura' : isSyncing ? 'Sincronizando' : 'Em Nuvem'}</span>}
         </div>
 
         <div className="space-y-2 border-t pt-4 dark:border-slate-800">
@@ -220,8 +227,8 @@ const AppContent = () => {
                 setCollapsedCategories={setCollapsedCategories} 
                 currentUser={currentUser}
                 onLogout={handleLogout}
-                onInteractionStart={() => { isSyncBlockedRef.current = true; }} // Bloqueia polling
-                onInteractionEnd={() => { isSyncBlockedRef.current = false; }}  // Libera polling
+                onInteractionStart={() => { isSyncBlockedRef.current = true; setIsSyncPaused(true); }}
+                onInteractionEnd={handleManualSaveComplete}
               />
             } />
             <Route path="/departures" element={<RouteDepartureView />} />
