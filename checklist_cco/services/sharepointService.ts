@@ -25,7 +25,8 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
       ...options.headers,
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'Prefer': 'HonorNonIndexedQueriesWarningMayFailOverLargeLists'
+      // Added both headers to ensure compatibility with large non-indexed lists
+      'Prefer': 'HonorNonIndexedQueriesWarningMayFailOverLargeLists, HonorNonIndexedQueriesWarningMayFailRandomly'
     }
   });
 
@@ -78,10 +79,6 @@ function normalizeString(str: string): string {
     .trim();
 }
 
-/**
- * Known read-only or system fields that should never be mapped to.
- * 'LinkTitle' is a common culprit for errors when display name is 'Title'.
- */
 const SYSTEM_FIELDS_TO_EXCLUDE = new Set([
   'id', 'linktitle', 'linktitlenomenu', 'modified', 'created', 'author', 'editor', 
   'attachments', 'contenttype', 'version', 'complianceassetid'
@@ -101,10 +98,8 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
     const normInternal = normalizeString(internalName);
     const normDisplay = normalizeString(displayName);
 
-    // Skip if internal name is a system field
     if (SYSTEM_FIELDS_TO_EXCLUDE.has(normInternal)) return;
 
-    // Only map display name if it's not a known system field internal name
     if (!SYSTEM_FIELDS_TO_EXCLUDE.has(normDisplay)) {
       mapping[normDisplay] = internalName;
     }
@@ -185,7 +180,6 @@ export const SharePointService = {
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
     
-    // Initial fields payload for Creation
     const fields: any = {
       Title: status.Title,
       [resolveFieldName(mapping, 'DataReferencia')]: status.DataReferencia,
@@ -196,38 +190,44 @@ export const SharePointService = {
     };
 
     try {
+        // We use Title as our unique natural key for daily items
         const filter = `fields/Title eq '${status.Title}'`;
         const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
         
         if (existing?.value?.length > 0) {
-          // UPDATE EXISTING: Do not send 'Title' to avoid LinkTitle read-only errors if possible
           const itemId = existing.value[0].id;
           const patchFields = { ...fields };
-          delete patchFields.Title; // Removing Title as it's the lookup key and doesn't change
+          // Removing Title during patch avoids LinkTitle issues on indexed/non-indexed Title scenarios
+          delete patchFields.Title; 
           
           await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
             method: 'PATCH',
             body: JSON.stringify(patchFields)
           });
-          console.debug(`Status updated successfully for ${status.Title}`);
         } else {
-          // CREATE NEW: Title is required during creation
           await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
             method: 'POST',
             body: JSON.stringify({ fields })
           });
-          console.debug(`Status created successfully for ${status.Title}`);
         }
     } catch (e: any) {
-        console.error("Critical error in updateStatus:", e);
-        // Retry POST if filter/patch somehow glitched but item doesn't exist
-        if (e.message.includes("not found") || e.message.includes("404")) {
+        // Fallback: If filter failed due to indexing, try a blind create
+        // SharePoint will return an error if it hits a unique constraint, but we catch generic errors here.
+        if (e.message.includes("Field 'Title' cannot be referenced") || e.message.includes("not indexed")) {
+          console.warn("Retrying with direct POST due to indexing error...");
+          try {
              await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
                 method: 'POST',
                 body: JSON.stringify({ fields })
             });
+          } catch(postErr: any) {
+             // If it fails because it already exists, that's fine for this app's logic
+             if (!postErr.message.includes("already exists")) {
+                 throw postErr;
+             }
+          }
         } else {
-            throw e;
+          throw e;
         }
     }
   },

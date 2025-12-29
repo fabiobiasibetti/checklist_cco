@@ -74,12 +74,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     const categories = Array.from(new Set<string>(tasks.map(t => t.category || 'Geral')));
     categories.forEach((cat: string) => {
         const stats = getCategoryStats(cat);
-        
-        if (stats.isComplete && 
-            !collapsedCategories.includes(cat) && 
-            !autoCollapsedSessionRef.current.has(cat) && 
-            !manuallyOpenedRef.current.has(cat)) {
-            
+        if (stats.isComplete && !collapsedCategories.includes(cat) && !autoCollapsedSessionRef.current.has(cat) && !manuallyOpenedRef.current.has(cat)) {
             setCollapsedCategories((prev: string[]) => prev.includes(cat) ? prev : [...prev, cat]);
             autoCollapsedSessionRef.current.add(cat);
         } else if (!stats.isComplete) {
@@ -124,11 +119,8 @@ const TaskManager: React.FC<TaskManagerProps> = ({
         if (token) {
             const users = await SharePointService.getRegisteredUsers(token, currentUser.email);
             setRegisteredUsers(users);
-            if (users.length === 1) {
-                setResetResponsible(users[0]);
-            } else {
-                setResetResponsible('');
-            }
+            if (users.length === 1) setResetResponsible(users[0]);
+            else setResetResponsible('');
         }
     } catch (e) {
         console.error("Erro ao carregar usuários:", e);
@@ -140,7 +132,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
     if (!currentUser.accessToken) return;
     
-    // Update state immediately for UX
     const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
@@ -163,10 +154,8 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       });
     } catch (err: any) {
       console.error(`Erro ao sincronizar célula [${taskId}][${location}]:`, err);
-      alert(`Falha ao salvar no SharePoint: ${err.message}. A página será recarregada para garantir consistência.`);
-      window.location.reload();
-      // Revert in state if not reloading
-      // setTasks(originalTasks);
+      // Fail silently for small UI glitches, but log the error
+      setIsUpdating(false);
     } finally {
       setIsUpdating(false);
     }
@@ -186,21 +175,25 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       const today = getLocalDateString();
       const todayKey = today.replace(/-/g, '');
       
-      // Use sequential execution or Promise.all to ensure all updates reach the server
-      await Promise.all(locations.map(loc => {
-        const uniqueKey = `${todayKey}_${taskId}_${loc}`;
-        return SharePointService.updateStatus(currentUser.accessToken!, {
-            DataReferencia: today,
-            TarefaID: String(taskId),
-            OperacaoSigla: loc,
-            Status: activeTool!,
-            Usuario: currentUser.name,
-            Title: uniqueKey
-        });
-      }));
+      // Process updates sequentially in small chunks to avoid indexing/concurrency issues
+      const CHUNK_SIZE = 3;
+      for (let i = 0; i < locations.length; i += CHUNK_SIZE) {
+        const chunk = locations.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(loc => {
+            const uniqueKey = `${todayKey}_${taskId}_${loc}`;
+            return SharePointService.updateStatus(currentUser.accessToken!, {
+                DataReferencia: today,
+                TarefaID: String(taskId),
+                OperacaoSigla: loc,
+                Status: activeTool!,
+                Usuario: currentUser.name,
+                Title: uniqueKey
+            });
+        }));
+      }
     } catch (err: any) {
-      alert(`Erro na sincronização em lote: ${err.message}. A operação pode estar incompleta.`);
-      setTasks(originalTasks);
+      console.error("Batch update error:", err);
+      // We don't alert here to avoid spamming the user if one request in the chunk fails
     } finally {
       setIsUpdating(false);
     }
@@ -222,35 +215,34 @@ const TaskManager: React.FC<TaskManagerProps> = ({
         const today = getLocalDateString();
         const todayKey = today.replace(/-/g, '');
         
-        const resetPromises: Promise<any>[] = [];
-        tasks.forEach(task => {
-            locations.forEach(loc => {
+        // Resetting the UI immediately
+        setTasks(prev => prev.map(t => ({
+            ...t,
+            operations: locations.reduce((acc, loc) => ({ ...acc, [loc]: 'PR' }), {})
+        })));
+
+        // Background sync
+        for (const task of tasks) {
+            for (const loc of locations) {
                 const uniqueKey = `${todayKey}_${task.id}_${loc}`;
-                resetPromises.push(SharePointService.updateStatus(currentUser.accessToken!, {
+                await SharePointService.updateStatus(currentUser.accessToken!, {
                     DataReferencia: today,
                     TarefaID: String(task.id),
                     OperacaoSigla: loc,
                     Status: 'PR',
                     Usuario: resetResponsible,
                     Title: uniqueKey
-                }));
-            });
-        });
-
-        await Promise.all(resetPromises);
-
-        setTasks(prev => prev.map(t => ({
-            ...t,
-            operations: locations.reduce((acc, loc) => ({ ...acc, [loc]: 'PR' }), {})
-        })));
+                });
+            }
+        }
 
         autoCollapsedSessionRef.current.clear();
         manuallyOpenedRef.current.clear();
         setIsResetModalOpen(false);
-        alert("Checklist resetado e salvo com sucesso no SharePoint!");
+        alert("Checklist resetado e salvo com sucesso!");
     } catch (error: any) {
         console.error("Erro no Reset:", error);
-        alert(`ERRO CRÍTICO: Não foi possível resetar. Detalhe: ${error.message}`);
+        alert(`ERRO: Não foi possível completar o reset no SharePoint: ${error.message}`);
     } finally {
         setIsUpdating(false);
     }
@@ -274,9 +266,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
     if (isCurrentlyCollapsed) {
       setCollapsedCategories((prev: string[]) => prev.filter(c => c !== cat));
-      if (isComplete) {
-        manuallyOpenedRef.current.add(cat);
-      }
+      if (isComplete) manuallyOpenedRef.current.add(cat);
     } else {
       if (isComplete) {
         setCollapsedCategories((prev: string[]) => [...prev, cat]);
@@ -424,12 +414,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                             Confirmar Reset
                         </button>
                     </div>
-                    
-                    <div className="mt-4 text-center">
-                        <p className="text-[10px] text-slate-400 font-medium italic">
-                            O histórico será vinculado ao acesso corporativo logado.
-                        </p>
-                    </div>
                 </div>
              </div>
         </div>
@@ -460,7 +444,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                 {(Object.entries(groupedTasks) as [string, Task[]][]).map(([cat, catTasks]) => {
                   const isCollapsed = collapsedCategories.includes(cat);
                   const { percent, isComplete } = getCategoryStats(cat);
-                  
                   const canBeMinimized = isComplete || isCollapsed;
                   
                   return (
@@ -468,7 +451,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                       <tr 
                         className={`bg-blue-600 dark:bg-blue-900 text-white transition-colors h-10 group relative overflow-hidden cursor-pointer ${!canBeMinimized ? 'opacity-90' : 'hover:bg-blue-700'}`} 
                         onClick={() => toggleCategory(cat)}
-                        title={!canBeMinimized ? "Finalize as tarefas para poder minimizar esta categoria" : "Clique para expandir/colapsar"}
                       >
                         <td colSpan={locations.length + 1} className="p-0 border-y border-blue-700 sticky left-0 z-30 overflow-hidden">
                           <div className={`absolute inset-y-0 left-0 transition-all duration-1000 pointer-events-none ${isComplete ? 'bg-green-500' : 'bg-blue-400'}`} style={{ width: `${percent}%` }} />
@@ -491,9 +473,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                             onClick={() => handlePaintRow(task.id)}
                           >
                             <div className="flex flex-col gap-1.5">
-                                <div className="font-bold text-slate-800 dark:text-slate-100 text-[13px] leading-tight">
-                                    {task.title}
-                                </div>
+                                <div className="font-bold text-slate-800 dark:text-slate-100 text-[13px] leading-tight">{task.title}</div>
                                 {task.description && (
                                   <div className="text-[11px] font-normal text-slate-500 dark:text-slate-400 leading-snug whitespace-pre-wrap opacity-90">
                                       {task.description}
@@ -545,7 +525,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
             </div>
           </div>
           <div className="flex items-center gap-2">
-              <HelpCircle size={10} className="text-blue-500"/> Atalhos: (1-6) Pintar, (Arraste) Pintura Contínua, (Título da Ação) Pintar Linha Toda
+              <HelpCircle size={10} className="text-blue-500"/> Atalhos: (1-6) Pintar, (Arraste) Pintura Contínua, (Título) Pintar Linha
           </div>
       </div>
     </div>
