@@ -39,7 +39,6 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     }
     console.error(`Graph API Error [${res.status}] at ${endpoint}:`, errDetail);
     
-    // Specifically handle 404/not found errors for search logic
     if (res.status === 404) {
         throw new Error("NOT_FOUND");
     }
@@ -79,6 +78,15 @@ function normalizeString(str: string): string {
     .trim();
 }
 
+/**
+ * Known read-only or system fields that should never be mapped to.
+ * 'LinkTitle' is a common culprit for errors when display name is 'Title'.
+ */
+const SYSTEM_FIELDS_TO_EXCLUDE = new Set([
+  'id', 'linktitle', 'linktitlenomenu', 'modified', 'created', 'author', 'editor', 
+  'attachments', 'contenttype', 'version', 'complianceassetid'
+]);
+
 async function getListColumnMapping(siteId: string, listId: string, token: string): Promise<Record<string, string>> {
   const cacheKey = `${siteId}_${listId}`;
   if (columnMappingCache[cacheKey]) return columnMappingCache[cacheKey];
@@ -87,8 +95,21 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   const mapping: Record<string, string> = {};
   
   columns.value.forEach((col: any) => {
-    mapping[normalizeString(col.name)] = col.name;
-    mapping[normalizeString(col.displayName)] = col.name;
+    const internalName = col.name;
+    const displayName = col.displayName;
+    
+    const normInternal = normalizeString(internalName);
+    const normDisplay = normalizeString(displayName);
+
+    // Skip if internal name is a system field
+    if (SYSTEM_FIELDS_TO_EXCLUDE.has(normInternal)) return;
+
+    // Only map display name if it's not a known system field internal name
+    if (!SYSTEM_FIELDS_TO_EXCLUDE.has(normDisplay)) {
+      mapping[normDisplay] = internalName;
+    }
+    
+    mapping[normInternal] = internalName;
   });
 
   columnMappingCache[cacheKey] = mapping;
@@ -143,7 +164,6 @@ export const SharePointService = {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
         const filter = `fields/DataReferencia eq '${date}'`;
-        // Increased $top to ensure we get all entries for the day across all locations
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1000`, token);
         return (data.value || []).map((item: any) => ({
           id: item.id,
@@ -165,7 +185,8 @@ export const SharePointService = {
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
     
-    const fields = {
+    // Initial fields payload for Creation
+    const fields: any = {
       Title: status.Title,
       [resolveFieldName(mapping, 'DataReferencia')]: status.DataReferencia,
       [resolveFieldName(mapping, 'TarefaID')]: status.TarefaID,
@@ -175,20 +196,22 @@ export const SharePointService = {
     };
 
     try {
-        // Query to check if the record already exists using Title as unique key
         const filter = `fields/Title eq '${status.Title}'`;
         const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
         
         if (existing?.value?.length > 0) {
-          // UPDATE EXISTING
+          // UPDATE EXISTING: Do not send 'Title' to avoid LinkTitle read-only errors if possible
           const itemId = existing.value[0].id;
+          const patchFields = { ...fields };
+          delete patchFields.Title; // Removing Title as it's the lookup key and doesn't change
+          
           await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
             method: 'PATCH',
-            body: JSON.stringify(fields)
+            body: JSON.stringify(patchFields)
           });
           console.debug(`Status updated successfully for ${status.Title}`);
         } else {
-          // CREATE NEW
+          // CREATE NEW: Title is required during creation
           await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
             method: 'POST',
             body: JSON.stringify({ fields })
@@ -197,8 +220,8 @@ export const SharePointService = {
         }
     } catch (e: any) {
         console.error("Critical error in updateStatus:", e);
-        // Fallback attempt if filter fails but item might not exist
-        if (e.message !== "NOT_FOUND") {
+        // Retry POST if filter/patch somehow glitched but item doesn't exist
+        if (e.message.includes("not found") || e.message.includes("404")) {
              await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
                 method: 'POST',
                 body: JSON.stringify({ fields })
