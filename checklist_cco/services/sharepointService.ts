@@ -86,12 +86,19 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   return mapping;
 }
 
-function resolveFieldName(mapping: Record<string, string>, target: string): string {
+function resolveFieldName(mapping: Record<string, string>, target: string, listContext?: string): string {
   const normalizedTarget = normalizeString(target);
-  // Prioridade para nomes técnicos específicos encontrados pelo Inspetor
-  if (normalizedTarget === 'tarefaid') return 'LinkTitle';
-  if (normalizedTarget === 'responsavel') return 'Title';
   
+  // Ajustes baseados nas tabelas do usuário
+  if (listContext === 'Status_Checklist') {
+      if (normalizedTarget === 'tarefaid') return 'LinkTitle';
+  }
+  
+  if (listContext === 'Historico_checklist_web') {
+      if (normalizedTarget === 'responsavel') return 'LinkTitle';
+      if (normalizedTarget === 'titulo') return 'Title';
+  }
+
   if (mapping[normalizedTarget]) return mapping[normalizedTarget];
   return target;
 }
@@ -159,12 +166,23 @@ export const SharePointService = {
     try {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
-        const filter = `fields/DataReferencia eq '${date}'`;
-        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+        const mapping = await getListColumnMapping(siteId, list.id, token);
+        
+        // Tentamos filtrar. Se der erro de indexação, buscamos tudo e filtramos na memória (fallback para listas pequenas/médias)
+        let data;
+        try {
+            const filter = `fields/DataReferencia eq '${date}'`;
+            data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+        } catch (e: any) {
+            console.warn("Filtro de DataReferencia falhou (provavelmente não indexado). Usando fallback de memória.");
+            data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=1000`, token);
+            data.value = data.value.filter((item: any) => item.fields.DataReferencia === date);
+        }
+
         return (data.value || []).map((item: any) => ({
           id: item.id,
           DataReferencia: item.fields.DataReferencia,
-          TarefaID: String(item.fields.LinkTitle || item.fields.TarefaID), // Ajustado para LinkTitle conforme Inspetor
+          TarefaID: String(item.fields.LinkTitle || item.fields.TarefaID),
           OperacaoSigla: item.fields.OperacaoSigla,
           Status: item.fields.Status,
           Usuario: item.fields.Usuario,
@@ -178,22 +196,33 @@ export const SharePointService = {
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
     
-    // Conforme Inspetor: TarefaID é LinkTitle e temos campo ChaveUnica
     const fields: any = {
       Title: status.Title,
       ChaveUnica: status.Title, 
       LinkTitle: status.TarefaID, 
-      [resolveFieldName(mapping, 'DataReferencia')]: status.DataReferencia,
-      [resolveFieldName(mapping, 'OperacaoSigla')]: status.OperacaoSigla,
-      [resolveFieldName(mapping, 'Status')]: status.Status,
-      [resolveFieldName(mapping, 'Usuario')]: status.Usuario
+      DataReferencia: status.DataReferencia,
+      OperacaoSigla: status.OperacaoSigla,
+      Status: status.Status,
+      Usuario: status.Usuario
     };
 
-    const filter = `fields/Title eq '${status.Title}'`;
-    const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+    // Para evitar o erro de indexação no Title, tentamos encontrar o item
+    let existingItem = null;
+    try {
+        // Tentamos filtrar pelo campo Title que é a nossa chave única concatenada
+        const filter = `fields/Title eq '${status.Title}'`;
+        const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+        if (res?.value?.length > 0) existingItem = res.value[0];
+    } catch (e: any) {
+        // Se o filtro falhar por falta de índice, buscamos os itens do dia e procuramos manualmente
+        console.warn("Busca por Title falhou. Tentando busca manual por DataReferencia.");
+        const dayItems = await this.getStatusByDate(token, status.DataReferencia);
+        const match = dayItems.find(s => s.Title === status.Title);
+        if (match) existingItem = { id: match.id };
+    }
     
-    if (existing?.value?.length > 0) {
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${existing.value[0].id}/fields`, token, {
+    if (existingItem) {
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${existingItem.id}/fields`, token, {
         method: 'PATCH',
         body: JSON.stringify(fields)
       });
@@ -210,12 +239,13 @@ export const SharePointService = {
     const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
 
-    // Conforme Inspetor: Título é Title, Data é Data, Celula é Celula
+    // Ajuste conforme tabela: Responsavel -> LinkTitle, Título -> Title
     const fields: any = {
       Title: record.resetBy, 
-      [resolveFieldName(mapping, 'Data')]: record.timestamp,
-      [resolveFieldName(mapping, 'DadosJSON')]: JSON.stringify(record.tasks),
-      [resolveFieldName(mapping, 'Celula')]: record.email
+      LinkTitle: record.resetBy, // Mapeado conforme sua tabela para Responsavel
+      Data: record.timestamp,
+      DadosJSON: JSON.stringify(record.tasks),
+      Celula: record.email
     };
 
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
@@ -228,21 +258,22 @@ export const SharePointService = {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
-      const mapping = await getListColumnMapping(siteId, list.id, token);
       
-      const colEmail = resolveFieldName(mapping, 'Celula');
-      const colData = resolveFieldName(mapping, 'Data');
-      const colJson = resolveFieldName(mapping, 'DadosJSON');
-      
-      const filter = `fields/${colEmail} eq '${userEmail}'`;
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+      let data;
+      try {
+          const filter = `fields/Celula eq '${userEmail}'`;
+          data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+      } catch (e) {
+          data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=500`, token);
+          data.value = data.value.filter((item: any) => (item.fields.Celula || "").toLowerCase() === userEmail.toLowerCase());
+      }
       
       return (data.value || []).map((item: any) => ({
         id: item.fields.id || item.id,
-        timestamp: item.fields[colData],
+        timestamp: item.fields.Data,
         resetBy: item.fields.Title, 
-        email: item.fields[colEmail],
-        tasks: JSON.parse(item.fields[colJson] || '[]')
+        email: item.fields.Celula,
+        tasks: JSON.parse(item.fields.DadosJSON || '[]')
       })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     } catch (e) { return []; }
   },
@@ -251,15 +282,12 @@ export const SharePointService = {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Usuarios_cco', token);
-      const mapping = await getListColumnMapping(siteId, list.id, token);
       
-      const colEmail = resolveFieldName(mapping, 'Email');
-      const colNome = resolveFieldName(mapping, 'Nome');
-      
-      const filter = `fields/${colEmail} eq '${email}'`;
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
-      
-      return (data.value || []).map((item: any) => item.fields[colNome] || "").filter(Boolean);
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
+      return (data.value || [])
+        .filter((item: any) => (item.fields.Email || "").toLowerCase().trim() === email.toLowerCase().trim())
+        .map((item: any) => item.fields.Nome || "")
+        .filter(Boolean);
     } catch (e) {
       return [];
     }
