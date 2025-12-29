@@ -44,7 +44,9 @@ const AppContent = () => {
       const matrixTasks: Task[] = spTasks.map(t => {
         const ops: Record<string, any> = {};
         opSiglas.forEach(sigla => {
-          const statusMatch = spStatus.find(s => s.TarefaID === t.id && s.OperacaoSigla === sigla);
+          // Em caso de duplicatas acidentais no SharePoint, pegamos o último item da lista (geralmente o mais recente)
+          const matchedStatuses = spStatus.filter(s => s.TarefaID === t.id && s.OperacaoSigla === sigla);
+          const statusMatch = matchedStatuses.length > 0 ? matchedStatuses[matchedStatuses.length - 1] : null;
           ops[sigla] = statusMatch ? statusMatch.Status : 'PR';
         });
 
