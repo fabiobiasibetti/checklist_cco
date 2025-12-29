@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, OperationStatus, User } from '../types';
-import { SharePointService } from '../services/sharepointService';
+import { SharePointService, getLocalDateString } from '../services/sharepointService';
 import { 
   Maximize2, Minimize2, Loader2, Database, 
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
@@ -140,6 +140,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
     if (!currentUser.accessToken) return;
     
+    // Update state immediately for UX
     const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
@@ -148,22 +149,24 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     
     setIsUpdating(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       const todayKey = today.replace(/-/g, '');
       const uniqueKey = `${todayKey}_${taskId}_${location}`;
       
       await SharePointService.updateStatus(currentUser.accessToken, {
         DataReferencia: today,
-        TarefaID: taskId,
+        TarefaID: String(taskId),
         OperacaoSigla: location,
         Status: status,
         Usuario: currentUser.name,
         Title: uniqueKey
       });
     } catch (err: any) {
-      console.error(`Erro ao sincronizar:`, err);
-      alert(`Falha ao salvar no SharePoint: ${err.message}`);
-      setTasks(originalTasks);
+      console.error(`Erro ao sincronizar célula [${taskId}][${location}]:`, err);
+      alert(`Falha ao salvar no SharePoint: ${err.message}. A página será recarregada para garantir consistência.`);
+      window.location.reload();
+      // Revert in state if not reloading
+      // setTasks(originalTasks);
     } finally {
       setIsUpdating(false);
     }
@@ -180,22 +183,23 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
     setIsUpdating(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       const todayKey = today.replace(/-/g, '');
       
+      // Use sequential execution or Promise.all to ensure all updates reach the server
       await Promise.all(locations.map(loc => {
         const uniqueKey = `${todayKey}_${taskId}_${loc}`;
         return SharePointService.updateStatus(currentUser.accessToken!, {
             DataReferencia: today,
-            TarefaID: taskId,
+            TarefaID: String(taskId),
             OperacaoSigla: loc,
-            Status: activeTool,
+            Status: activeTool!,
             Usuario: currentUser.name,
             Title: uniqueKey
         });
       }));
     } catch (err: any) {
-      alert(`Erro na sincronização em lote: ${err.message}`);
+      alert(`Erro na sincronização em lote: ${err.message}. A operação pode estar incompleta.`);
       setTasks(originalTasks);
     } finally {
       setIsUpdating(false);
@@ -215,7 +219,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
             email: currentUser.email
         });
         
-        const today = new Date().toISOString().split('T')[0];
+        const today = getLocalDateString();
         const todayKey = today.replace(/-/g, '');
         
         const resetPromises: Promise<any>[] = [];
@@ -224,7 +228,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                 const uniqueKey = `${todayKey}_${task.id}_${loc}`;
                 resetPromises.push(SharePointService.updateStatus(currentUser.accessToken!, {
                     DataReferencia: today,
-                    TarefaID: task.id,
+                    TarefaID: String(task.id),
                     OperacaoSigla: loc,
                     Status: 'PR',
                     Usuario: resetResponsible,

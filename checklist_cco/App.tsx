@@ -6,7 +6,7 @@ import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import Login from './components/Login';
-import { SharePointService } from './services/sharepointService';
+import { SharePointService, getLocalDateString } from './services/sharepointService';
 import { Task, User, SPTask, SPOperation, SPStatus } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
 
@@ -35,7 +35,9 @@ const AppContent = () => {
     try {
       const spTasks = await SharePointService.getTasks(user.accessToken);
       const spOps = await SharePointService.getOperations(user.accessToken, user.email);
-      const today = new Date().toISOString().split('T')[0];
+      
+      // Use local date string consistently
+      const today = getLocalDateString();
       const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
 
       const opSiglas = spOps.map(o => o.Title);
@@ -44,12 +46,12 @@ const AppContent = () => {
       const matrixTasks: Task[] = spTasks.map(t => {
         const ops: Record<string, any> = {};
         opSiglas.forEach(sigla => {
-          const statusMatch = spStatus.find(s => s.TarefaID === t.id && s.OperacaoSigla === sigla);
+          const statusMatch = spStatus.find(s => String(s.TarefaID) === String(t.id) && s.OperacaoSigla === sigla);
           ops[sigla] = statusMatch ? statusMatch.Status : 'PR';
         });
 
         return {
-          id: t.id,
+          id: String(t.id),
           title: t.Title,
           description: t.Descricao,
           category: t.Categoria,
