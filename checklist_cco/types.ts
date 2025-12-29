@@ -5,6 +5,19 @@ export interface OperationStates {
   [location: string]: OperationStatus;
 }
 
+// Added missing TaskPriority enum
+export enum TaskPriority {
+  LOW = 'Baixa',
+  MEDIUM = 'Média',
+  HIGH = 'Alta'
+}
+
+// Added missing TaskStatus enum
+export enum TaskStatus {
+  TODO = 'TODO',
+  DONE = 'DONE'
+}
+
 export interface Task {
   id: string;
   timeRange: string;
@@ -15,26 +28,49 @@ export interface Task {
   createdAt: string;
   isDaily: boolean;
   active?: boolean;
+  // Added optional fields to support objects returned by Gemini
+  priority?: TaskPriority | string;
+  status?: TaskStatus;
+  dueDate?: string;
 }
 
-export enum TaskPriority {
-  BAIXA = 'Baixa',
-  MEDIA = 'Média',
-  ALTA = 'Alta'
-}
-
-export enum TaskStatus {
-  TODO = 'TODO',
-  DONE = 'DONE'
-}
-
+// Added missing Customer interface
 export interface Customer {
   id: string;
   name: string;
-  company?: string;
-  email?: string;
-  phone?: string;
+  company: string;
+  email: string;
+  phone: string;
   status: 'Lead' | 'Ativo' | 'Inativo';
+}
+
+export interface SPListInfo {
+  id: string;
+  displayName: string;
+  name: string;
+  webUrl: string;
+  columns?: SPColumnInfo[];
+}
+
+export interface SPColumnInfo {
+  name: string;
+  displayName: string;
+  description: string;
+  type: string;
+}
+
+export interface User {
+  email: string;
+  name: string;
+  accessToken?: string;
+}
+
+export interface HistoryRecord {
+  id: string;
+  timestamp: string;
+  tasks: Task[];
+  resetBy?: string;
+  email?: string;
 }
 
 export interface RouteDeparture {
@@ -83,25 +119,6 @@ export interface SPStatus {
   Title: string;
 }
 
-export interface User {
-  email: string;
-  name: string;
-  accessToken?: string;
-}
-
-export interface HistoryRecord {
-  id: string;
-  timestamp: string;
-  tasks: Task[];
-  resetBy?: string;
-  email?: string; // Novo campo para rastreabilidade e filtro
-}
-
-export const VALID_USERS = [
-  { email: 'cco.logistica@viagroup.com.br', password: '1234', name: 'Logística 1' },
-  { email: 'cco.logistica2@viagroup.com.br', password: '1234', name: 'Logística 2' }
-];
-
+export const VALID_USERS = [];
 export const INITIAL_LOCATIONS: string[] = [];
-export const LOCATIONS: string[] = [];
 export const LOGISTICA_2_LOCATIONS: string[] = ['LAT-CWB', 'LAT-SJP', 'LAT-LDB', 'LAT-MGA'];

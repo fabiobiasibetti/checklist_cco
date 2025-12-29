@@ -1,17 +1,18 @@
 
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, Settings } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
+import SharePointInspector from './components/SharePointInspector';
 import Login from './components/Login';
 import { SharePointService } from './services/sharepointService';
 import { Task, User, SPTask, SPOperation, SPStatus } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
 
 const SidebarLink = ({ to, icon: Icon, label, active, collapsed }: any) => (
-  <a href={`#${to}`} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'} ${collapsed ? 'justify-center' : ''}`}>
+  <a href={`#${to}`} className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'} ${collapsed ? 'justify-center' : ''}`}>
     <Icon size={20} />
     {!collapsed && <span className="font-medium whitespace-nowrap">{label}</span>}
   </a>
@@ -83,23 +84,28 @@ const AppContent = () => {
 
   if (!currentUser) return <Login onLogin={(u) => { setUser(u); loadDataFromSharePoint(u); }} />;
 
+  const currentPath = window.location.hash || '#/';
+
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden">
       <aside className={`bg-white dark:bg-slate-900 border-r dark:border-slate-800 transition-all ${collapsed ? 'w-20' : 'w-64'} p-4 flex flex-col`}>
         <div className="mb-10 flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">V</div>
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shrink-0">V</div>
           {!collapsed && <h1 className="font-bold dark:text-white text-sm">CCO Digital</h1>}
         </div>
         <nav className="flex-1 space-y-2">
-          <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
-          <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
-          <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
+          <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={currentPath === '#/'} collapsed={collapsed} />
+          <SidebarLink to="/departures" icon={Truck} label="Saídas" active={currentPath === '#/departures'} collapsed={collapsed} />
+          <SidebarLink to="/history" icon={History} label="Histórico" active={currentPath === '#/history'} collapsed={collapsed} />
+          <div className="pt-4 border-t dark:border-slate-800 mt-4 opacity-60">
+             <SidebarLink to="/inspector" icon={Settings} label="SharePoint" active={currentPath === '#/inspector'} collapsed={collapsed} />
+          </div>
         </nav>
         <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
-           <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 rounded-lg">
+           <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">
              {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
            </button>
-           <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 rounded-lg">
+           <button onClick={() => setCollapsed(!collapsed)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">
              {collapsed ? <ChevronRight size={20}/> : <ChevronLeft size={20}/>}
            </button>
         </div>
@@ -127,6 +133,7 @@ const AppContent = () => {
             } />
             <Route path="/departures" element={<RouteDepartureView />} />
             <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
+            <Route path="/inspector" element={<SharePointInspector currentUser={currentUser} />} />
           </Routes>
         )}
       </main>
