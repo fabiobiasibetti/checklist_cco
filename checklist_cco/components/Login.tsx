@@ -26,25 +26,58 @@ const MicrosoftIcon = () => (
 );
 
 const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(true); // Começa como true para verificar silenciamento
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    msalInstance.initialize().then(() => {
-        msalInstance.handleRedirectPromise().then(response => {
-            if (response && response.account) {
-                onLogin({
-                    email: response.account.username,
-                    name: response.account.name || response.account.username,
-                    accessToken: response.accessToken
-                });
+    const initializeAuth = async () => {
+        try {
+            await msalInstance.initialize();
+            
+            // Tenta processar retorno de redirecionamento primeiro
+            const redirectResponse = await msalInstance.handleRedirectPromise();
+            if (redirectResponse && redirectResponse.account) {
+                completeLogin(redirectResponse);
+                return;
             }
-        });
-    });
+
+            // Verifica se já existe uma conta logada no cache (localStorage)
+            const accounts = msalInstance.getAllAccounts();
+            if (accounts.length > 0) {
+                try {
+                    const silentRequest = {
+                        scopes: ["User.Read", "Sites.ReadWrite.All"],
+                        account: accounts[0]
+                    };
+                    const silentResponse = await msalInstance.acquireTokenSilent(silentRequest);
+                    completeLogin(silentResponse);
+                    return;
+                } catch (silentError) {
+                    console.error("Erro ao adquirir token silenciosamente:", silentError);
+                }
+            }
+        } catch (err) {
+            console.error("Erro na inicialização do MSAL:", err);
+        } finally {
+            setIsLoggingIn(false);
+        }
+    };
+
+    initializeAuth();
   }, [onLogin]);
+
+  const completeLogin = (response: any) => {
+    setCurrentUser(response.account.username);
+    onLogin({
+        email: response.account.username,
+        name: response.account.name || response.account.username,
+        accessToken: response.accessToken
+    });
+  };
 
   const handleMicrosoftLogin = async () => {
     setIsLoggingIn(true);
+    setError(null);
     try {
         await msalInstance.initialize();
         const loginRequest = {
@@ -53,14 +86,10 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
         };
         const response = await msalInstance.loginPopup(loginRequest);
         if (response && response.account) {
-            setCurrentUser(response.account.username);
-            onLogin({
-                email: response.account.username,
-                name: response.account.name || response.account.username,
-                accessToken: response.accessToken
-            });
+            completeLogin(response);
         }
     } catch (err: any) {
+        console.error(err);
         setError("Falha na autenticação corporativa.");
     } finally {
         setIsLoggingIn(false);
@@ -75,13 +104,23 @@ const Login: React.FC<{ onLogin: (user: User) => void }> = ({ onLogin }) => {
             <div className="mb-8"><img src="https://viagroup.com.br/assets/via_group-22fac685.png" alt="VIA Group" className="max-w-[180px]"/></div>
             <h1 className="text-2xl font-black text-slate-800 mb-2">Checklist CCO</h1>
             <p className="text-slate-500 text-sm mb-8">Gestão de Operações em Tempo Real</p>
-            {error && <div className="w-full mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-xl">{error}</div>}
+            {error && <div className="w-full mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-xl flex items-center gap-2"><AlertCircle size={14}/>{error}</div>}
             <button 
                 onClick={handleMicrosoftLogin}
                 disabled={isLoggingIn}
-                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all hover:bg-slate-800"
+                className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all hover:bg-slate-800 disabled:opacity-70"
             >
-                {isLoggingIn ? <Loader2 className="animate-spin" /> : <><MicrosoftIcon /><span>Entrar com Microsoft</span></>}
+                {isLoggingIn ? (
+                    <div className="flex items-center gap-2">
+                        <Loader2 className="animate-spin" size={20} />
+                        <span>Autenticando...</span>
+                    </div>
+                ) : (
+                    <>
+                        <MicrosoftIcon />
+                        <span>Entrar com Microsoft</span>
+                    </>
+                )}
             </button>
             <div className="mt-8 text-[10px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2">
                 <ShieldCheck size={12} className="text-blue-500" /> Acesso Restrito SharePoint
