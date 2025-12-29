@@ -32,10 +32,7 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     console.error(`Graph API Error [${res.status}]:`, errDetail);
     
     if (res.status === 403) {
-        throw new Error(`Acesso Negado (403): O App não tem permissão para escrever nesta lista ou o usuário não tem permissão de edição no SharePoint. Verifique os escopos Sites.ReadWrite.All.`);
-    }
-    if (res.status === 404) {
-        throw new Error(`Não Encontrado (404): Verifique se a URL do site ou o nome da lista estão corretos.`);
+        throw new Error(`Acesso Negado (403): Verifique se o App tem permissão Sites.ReadWrite.All e se você tem acesso de edição no site CCO.`);
     }
     
     throw new Error(`${errorCode}: ${errDetail}`);
@@ -61,7 +58,7 @@ async function findListByIdOrName(siteId: string, listName: string, token: strin
     );
     if (found) return found;
   }
-  throw new Error(`Lista '${listName}' não encontrada no site.`);
+  throw new Error(`Lista '${listName}' não encontrada.`);
 }
 
 function normalizeString(str: string): string {
@@ -91,6 +88,10 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
 
 function resolveFieldName(mapping: Record<string, string>, target: string): string {
   const normalizedTarget = normalizeString(target);
+  // Prioridade para nomes técnicos específicos encontrados pelo Inspetor
+  if (normalizedTarget === 'tarefaid') return 'LinkTitle';
+  if (normalizedTarget === 'responsavel') return 'Title';
+  
   if (mapping[normalizedTarget]) return mapping[normalizedTarget];
   return target;
 }
@@ -163,7 +164,7 @@ export const SharePointService = {
         return (data.value || []).map((item: any) => ({
           id: item.id,
           DataReferencia: item.fields.DataReferencia,
-          TarefaID: String(item.fields.TarefaID),
+          TarefaID: String(item.fields.LinkTitle || item.fields.TarefaID), // Ajustado para LinkTitle conforme Inspetor
           OperacaoSigla: item.fields.OperacaoSigla,
           Status: item.fields.Status,
           Usuario: item.fields.Usuario,
@@ -176,39 +177,40 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
-    const fields = {
+    
+    // Conforme Inspetor: TarefaID é LinkTitle e temos campo ChaveUnica
+    const fields: any = {
       Title: status.Title,
+      ChaveUnica: status.Title, 
+      LinkTitle: status.TarefaID, 
       [resolveFieldName(mapping, 'DataReferencia')]: status.DataReferencia,
-      [resolveFieldName(mapping, 'TarefaID')]: status.TarefaID,
       [resolveFieldName(mapping, 'OperacaoSigla')]: status.OperacaoSigla,
       [resolveFieldName(mapping, 'Status')]: status.Status,
       [resolveFieldName(mapping, 'Usuario')]: status.Usuario
     };
-    try {
-        const filter = `fields/Title eq '${status.Title}'`;
-        const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
-        if (existing?.value?.length > 0) {
-          await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${existing.value[0].id}/fields`, token, {
-            method: 'PATCH',
-            body: JSON.stringify(fields)
-          });
-        } else {
-          await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
-            method: 'POST',
-            body: JSON.stringify({ fields })
-          });
-        }
-    } catch (e) {
-        throw e; // Repassa para o TaskManager tratar
+
+    const filter = `fields/Title eq '${status.Title}'`;
+    const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+    
+    if (existing?.value?.length > 0) {
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${existing.value[0].id}/fields`, token, {
+        method: 'PATCH',
+        body: JSON.stringify(fields)
+      });
+    } else {
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+        method: 'POST',
+        body: JSON.stringify({ fields })
+      });
     }
   },
 
   async saveHistory(token: string, record: HistoryRecord): Promise<void> {
     const siteId = await getResolvedSiteId(token);
-    const listName = 'Historico_checklist_web';
-    const list = await findListByIdOrName(siteId, listName, token);
+    const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
 
+    // Conforme Inspetor: Título é Title, Data é Data, Celula é Celula
     const fields: any = {
       Title: record.resetBy, 
       [resolveFieldName(mapping, 'Data')]: record.timestamp,
@@ -227,6 +229,7 @@ export const SharePointService = {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
       const mapping = await getListColumnMapping(siteId, list.id, token);
+      
       const colEmail = resolveFieldName(mapping, 'Celula');
       const colData = resolveFieldName(mapping, 'Data');
       const colJson = resolveFieldName(mapping, 'DadosJSON');
