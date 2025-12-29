@@ -89,11 +89,13 @@ const AppContent = () => {
     if (!currentUser?.accessToken || isLoading) return;
 
     const syncInterval = setInterval(async () => {
+      // Se estiver sincronizando, bloqueado por interação ou em cooldown, ignora este ciclo
       if (isSyncing || isSyncBlockedRef.current) return;
 
       try {
         const meta = await SharePointService.getListMetadata(currentUser.accessToken!, 'Status_Checklist');
         
+        // Só sincroniza se o timestamp de modificação na nuvem for diferente do que temos localmente
         if (meta.lastModifiedDateTime !== lastListTimestampRef.current) {
           setIsSyncing(true);
           const today = new Date().toISOString().split('T')[0];
@@ -121,7 +123,7 @@ const AppContent = () => {
       } catch (e) {
         setIsSyncing(false);
       }
-    }, 5000);
+    }, 6000); // Aumentado levemente o intervalo para estabilidade
 
     return () => clearInterval(syncInterval);
   }, [currentUser, isLoading, isSyncing, locations]);
@@ -130,24 +132,23 @@ const AppContent = () => {
   const handleManualSaveComplete = async () => {
     if (!currentUser?.accessToken) return;
     
-    // 1. Mantém o bloqueio por um tempo de segurança (cooldown)
+    // 1. Mantém o bloqueio por um tempo de segurança (cooldown) maior
+    // Isso evita que a sincronização automática capture um estado intermediário do SharePoint
     isSyncBlockedRef.current = true;
     setIsSyncPaused(true);
 
     if (cooldownTimeoutRef.current) window.clearTimeout(cooldownTimeoutRef.current);
 
-    try {
-        // 2. Busca o novo timestamp IMEDIATAMENTE para "consumir" a própria alteração
-        const meta = await SharePointService.getListMetadata(currentUser.accessToken, 'Status_Checklist');
-        lastListTimestampRef.current = meta.lastModifiedDateTime;
-    } catch (e) {}
+    // 2. Não atualizamos o lastListTimestampRef aqui manualmente, pois o SharePoint
+    // pode demorar alguns segundos para atualizar o metadado de "LastModified" após o POST/PATCH.
+    // Deixamos o sync interval cuidar disso após o período de cooldown.
 
-    // 3. Libera o sync após 3 segundos (tempo para o SharePoint estabilizar)
+    // 3. Libera o sync após 8 segundos (tempo seguro para o SharePoint estabilizar e refletir as mudanças)
     cooldownTimeoutRef.current = window.setTimeout(() => {
         isSyncBlockedRef.current = false;
         setIsSyncPaused(false);
         cooldownTimeoutRef.current = null;
-    }, 3000);
+    }, 8000); 
   };
 
   const checkAndTriggerPartialSave = async (user: User, currentTasks: Task[]) => {
