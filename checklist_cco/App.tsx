@@ -6,7 +6,7 @@ import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import Login from './components/Login';
-import { SharePointService, getLocalDateString } from './services/sharepointService';
+import { SharePointService } from './services/sharepointService';
 import { Task, User, SPTask, SPOperation, SPStatus } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
 
@@ -33,55 +33,23 @@ const AppContent = () => {
     (window as any).__access_token = user.accessToken; 
     setIsLoading(true);
     try {
-      // 1. Get fundamental metadata
-      const [spTasks, spOps] = await Promise.all([
-        SharePointService.getTasks(user.accessToken),
-        SharePointService.getOperations(user.accessToken, user.email)
-      ]);
+      const spTasks = await SharePointService.getTasks(user.accessToken);
+      const spOps = await SharePointService.getOperations(user.accessToken, user.email);
+      const today = new Date().toISOString().split('T')[0];
+      const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
 
       const opSiglas = spOps.map(o => o.Title);
       setLocations(opSiglas);
 
-      // 2. Get all persistent status
-      const spStatus = await SharePointService.getAllStatus(user.accessToken);
-      const statusMap = new Map<string, SPStatus>();
-      spStatus.forEach(s => statusMap.set(s.Title, s));
-
-      // 3. Auto-Provisioning: Check if all Task-Op combinations exist
-      const provisionPromises: Promise<any>[] = [];
-      spTasks.forEach(task => {
-        opSiglas.forEach(sigla => {
-            const key = `${task.id}_${sigla}`;
-            if (!statusMap.has(key)) {
-                console.log(`Célula faltante detectada: ${key}. Criando no SharePoint...`);
-                provisionPromises.push(
-                    SharePointService.ensureCellExists(user.accessToken!, String(task.id), sigla)
-                        .then(newStatus => statusMap.set(newStatus.Title, newStatus))
-                );
-            }
-        });
-      });
-
-      if (provisionPromises.length > 0) {
-          await Promise.all(provisionPromises);
-      }
-
-      // 4. Update TaskManager internal ID ref
-      if ((window as any).refreshSpIds) {
-          (window as any).refreshSpIds(Array.from(statusMap.values()));
-      }
-
-      // 5. Build UI state
       const matrixTasks: Task[] = spTasks.map(t => {
         const ops: Record<string, any> = {};
         opSiglas.forEach(sigla => {
-          const key = `${t.id}_${sigla}`;
-          const statusMatch = statusMap.get(key);
+          const statusMatch = spStatus.find(s => s.TarefaID === t.id && s.OperacaoSigla === sigla);
           ops[sigla] = statusMatch ? statusMatch.Status : 'PR';
         });
 
         return {
-          id: String(t.id),
+          id: t.id,
           title: t.Title,
           description: t.Descricao,
           category: t.Categoria,
@@ -140,7 +108,7 @@ const AppContent = () => {
         {isLoading ? (
           <div className="h-full flex items-center justify-center flex-col gap-4 text-blue-600">
              <Loader2 size={40} className="animate-spin" />
-             <p className="font-bold animate-pulse">Sincronizando Estado Atual...</p>
+             <p className="font-bold animate-pulse">Sincronizando com SharePoint...</p>
           </div>
         ) : (
           <Routes>

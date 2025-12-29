@@ -5,13 +5,6 @@ const SITE_PATH = "vialacteoscombr.sharepoint.com:/sites/CCO";
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, Record<string, string>> = {};
 
-export const getLocalDateString = () => {
-  const date = new Date();
-  const offset = date.getTimezoneOffset();
-  const adjustedDate = new Date(date.getTime() - (offset * 60 * 1000));
-  return adjustedDate.toISOString().split('T')[0];
-};
-
 async function graphFetch(endpoint: string, token: string, options: RequestInit = {}) {
   const url = endpoint.startsWith('https://') ? endpoint : `https://graph.microsoft.com/v1.0${endpoint}`;
   
@@ -21,7 +14,7 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
       ...options.headers,
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly, HonorNonIndexedQueriesWarningMayFailOverLargeLists'
+      'Prefer': 'HonorNonIndexedQueriesWarningMayFailOverLargeLists, HonorNonIndexedQueriesWarningMayFailRandomly'
     }
   });
 
@@ -33,7 +26,8 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     } catch(e) {
       errDetail = await res.text();
     }
-    console.error(`Graph API Error [${res.status}] at ${endpoint}:`, errDetail);
+    console.error(`Graph API Error [${res.status}]:`, errDetail);
+    if (res.status === 403) throw new Error("Acesso Negado: Verifique as permissões de EDIÇÃO na lista.");
     throw new Error(errDetail);
   }
   return res.status === 204 ? null : res.json();
@@ -77,10 +71,8 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   const mapping: Record<string, string> = {};
   
   columns.value.forEach((col: any) => {
-    const internalName = col.name;
-    const displayName = col.displayName;
-    mapping[normalizeString(internalName)] = internalName;
-    mapping[normalizeString(displayName)] = internalName;
+    mapping[normalizeString(col.name)] = col.name;
+    mapping[normalizeString(col.displayName)] = col.name;
   });
 
   columnMappingCache[cacheKey] = mapping;
@@ -89,7 +81,8 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
 
 function resolveFieldName(mapping: Record<string, string>, target: string): string {
   const normalizedTarget = normalizeString(target);
-  return mapping[normalizedTarget] || target;
+  if (mapping[normalizedTarget]) return mapping[normalizedTarget];
+  return target;
 }
 
 export const SharePointService = {
@@ -98,7 +91,7 @@ export const SharePointService = {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'Tarefas_Checklist', token);
         const mapping = await getListColumnMapping(siteId, list.id, token);
-        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=999`, token);
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
         return (data.value || []).map((item: any) => ({
           id: String(item.fields.id || item.id),
           Title: item.fields.Title || "Sem Título",
@@ -117,7 +110,7 @@ export const SharePointService = {
         const list = await findListByIdOrName(siteId, 'Operacoes_Checklist', token);
         const mapping = await getListColumnMapping(siteId, list.id, token);
         const colEmail = resolveFieldName(mapping, 'Email');
-        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=999`, token);
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
         return (data.value || [])
           .filter((item: any) => (item.fields[colEmail] || "").toLowerCase().trim() === userEmail.toLowerCase().trim())
           .map((item: any) => ({
@@ -129,15 +122,12 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
-  /**
-   * Fetches the entire "current state" of the checklist.
-   * Since we use a persistent model, this list is small and stable.
-   */
-  async getAllStatus(token: string): Promise<SPStatus[]> {
+  async getStatusByDate(token: string, date: string): Promise<SPStatus[]> {
     try {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
-        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=5000`, token);
+        const filter = `fields/DataReferencia eq '${date}'`;
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
         return (data.value || []).map((item: any) => ({
           id: item.id,
           DataReferencia: item.fields.DataReferencia,
@@ -145,92 +135,101 @@ export const SharePointService = {
           OperacaoSigla: item.fields.OperacaoSigla,
           Status: item.fields.Status,
           Usuario: item.fields.Usuario,
-          Title: item.fields.Title // Our key: TaskID_OpSigla
+          Title: item.fields.Title
         }));
-    } catch (e) { 
-        return []; 
-    }
+    } catch (e) { return []; }
   },
 
-  /**
-   * Provision a cell if it doesn't exist.
-   */
-  async ensureCellExists(token: string, taskId: string, opSigla: string): Promise<SPStatus> {
+  async updateStatus(token: string, status: SPStatus): Promise<void> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
-    const key = `${taskId}_${opSigla}`;
-
-    const fields: any = {
-        Title: key,
-        [resolveFieldName(mapping, 'TarefaID')]: taskId,
-        [resolveFieldName(mapping, 'OperacaoSigla')]: opSigla,
-        [resolveFieldName(mapping, 'Status')]: 'PR',
-        [resolveFieldName(mapping, 'DataReferencia')]: getLocalDateString()
-    };
-
-    const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
-        method: 'POST',
-        body: JSON.stringify({ fields })
-    });
-
-    return {
-        id: res.id,
-        Title: key,
-        TarefaID: taskId,
-        OperacaoSigla: opSigla,
-        Status: 'PR',
-        DataReferencia: getLocalDateString(),
-        Usuario: ''
-    };
-  },
-
-  async updateStatus(token: string, status: SPStatus, itemId: string): Promise<void> {
-    const siteId = await getResolvedSiteId(token);
-    const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
-    const mapping = await getListColumnMapping(siteId, list.id, token);
-    
-    const fields: any = {
+    const fields = {
+      Title: status.Title,
+      [resolveFieldName(mapping, 'DataReferencia')]: status.DataReferencia,
+      [resolveFieldName(mapping, 'TarefaID')]: status.TarefaID,
+      [resolveFieldName(mapping, 'OperacaoSigla')]: status.OperacaoSigla,
       [resolveFieldName(mapping, 'Status')]: status.Status,
-      [resolveFieldName(mapping, 'Usuario')]: status.Usuario,
-      [resolveFieldName(mapping, 'DataReferencia')]: getLocalDateString()
+      [resolveFieldName(mapping, 'Usuario')]: status.Usuario
     };
-
-    await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
-        method: 'PATCH',
-        body: JSON.stringify(fields)
-    });
+    try {
+        const filter = `fields/Title eq '${status.Title}'`;
+        const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+        if (existing?.value?.length > 0) {
+          await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${existing.value[0].id}/fields`, token, {
+            method: 'PATCH',
+            body: JSON.stringify(fields)
+          });
+        } else {
+          await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+            method: 'POST',
+            body: JSON.stringify({ fields })
+          });
+        }
+    } catch (e) {
+        await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+            method: 'POST',
+            body: JSON.stringify({ fields })
+        });
+    }
   },
 
   async saveHistory(token: string, record: HistoryRecord): Promise<void> {
     const siteId = await getResolvedSiteId(token);
-    const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
+    const listName = 'Historico_checklist_web';
+    const list = await findListByIdOrName(siteId, listName, token);
+
     const fields: any = {
       Title: record.resetBy, 
       Data: record.timestamp,
       DadosJSON: JSON.stringify(record.tasks),
       Celula: record.email
     };
-    await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
-      method: 'POST',
-      body: JSON.stringify({ fields })
-    });
+
+    try {
+        await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+          method: 'POST',
+          body: JSON.stringify({ fields })
+        });
+    } catch (error: any) {
+        throw new Error(`Erro ao gravar na lista ${listName}: ${error.message}`);
+    }
   },
 
   async getHistory(token: string, userEmail: string): Promise<HistoryRecord[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=500`, token);
-      return (data.value || [])
-        .filter((item: any) => (item.fields.Celula || "").toLowerCase() === userEmail.toLowerCase())
-        .map((item: any) => ({
-          id: item.id,
-          timestamp: item.fields.Data,
-          resetBy: item.fields.Title, 
-          email: item.fields.Celula,
-          tasks: JSON.parse(item.fields.DadosJSON || '[]')
-        })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      const filter = `fields/Celula eq '${userEmail}'`;
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+      
+      return (data.value || []).map((item: any) => ({
+        id: item.fields.id || item.id,
+        timestamp: item.fields.Data,
+        resetBy: item.fields.Title, 
+        email: item.fields.Celula,
+        tasks: JSON.parse(item.fields.DadosJSON || '[]')
+      })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     } catch (e) { return []; }
+  },
+
+  async getRegisteredUsers(token: string, email: string): Promise<string[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'Usuarios_cco', token);
+      const mapping = await getListColumnMapping(siteId, list.id, token);
+      
+      const colEmail = resolveFieldName(mapping, 'Email');
+      const colNome = resolveFieldName(mapping, 'Nome');
+      
+      // Filtra pelo e-mail do usuário logado
+      const filter = `fields/${colEmail} eq '${email}'`;
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+      
+      return (data.value || []).map((item: any) => item.fields[colNome] || "").filter(Boolean);
+    } catch (e) {
+      console.error("Erro ao buscar usuários cadastrados:", e);
+      return [];
+    }
   }
 };
