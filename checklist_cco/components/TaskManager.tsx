@@ -46,33 +46,14 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const [syncError, setSyncError] = useState(false);
   const [compact, setCompact] = useState(true);
   
-  // Track SP Item IDs locally to avoid filtering Title
   const cellIdsRef = useRef<Record<string, string>>({});
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetResponsible, setResetResponsible] = useState('');
-  const [registeredUsers, setRegisteredUsers] = useState<string[]>([]);
-  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
   const paintedThisDrag = useRef<Set<string>>(new Set());
-  
-  const autoCollapsedSessionRef = useRef<Set<string>>(new Set());
-  const manuallyOpenedRef = useRef<Set<string>>(new Set());
 
-  // Initialize IDs from existing tasks if they were loaded with IDs
-  useEffect(() => {
-    const today = getLocalDateString().replace(/-/g, '');
-    tasks.forEach(task => {
-        locations.forEach(loc => {
-            const key = `${today}_${task.id}_${loc}`;
-            // If the service loaded status with IDs, we should have them here.
-            // Since our Task type doesn't store IDs per cell, we rely on the 
-            // getStatusByDate call in App.tsx to populate this map.
-        });
-    });
-  }, [tasks, locations]);
-
-  // Expose a way to populate the ID map from App.tsx
+  // Populate ID map from loaded state
   useEffect(() => {
       (window as any).refreshSpIds = (statusList: any[]) => {
           statusList.forEach(s => {
@@ -95,47 +76,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     return { percent, isComplete: percent === 100 };
   };
 
-  useEffect(() => {
-    const categories = Array.from(new Set<string>(tasks.map(t => t.category || 'Geral')));
-    categories.forEach((cat: string) => {
-        const stats = getCategoryStats(cat);
-        if (stats.isComplete && !collapsedCategories.includes(cat) && !autoCollapsedSessionRef.current.has(cat) && !manuallyOpenedRef.current.has(cat)) {
-            setCollapsedCategories((prev: string[]) => prev.includes(cat) ? prev : [...prev, cat]);
-            autoCollapsedSessionRef.current.add(cat);
-        } else if (!stats.isComplete) {
-            autoCollapsedSessionRef.current.delete(cat);
-            manuallyOpenedRef.current.delete(cat);
-        }
-    });
-  }, [tasks]);
-
-  useEffect(() => {
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      paintedThisDrag.current.clear();
-    };
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => window.removeEventListener('mouseup', handleMouseUp);
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
-      switch (e.key) {
-        case '1': setActiveTool('OK'); break;
-        case '2': setActiveTool('EA'); break;
-        case '3': setActiveTool('ATT'); break;
-        case '4': setActiveTool('AR'); break;
-        case '5': setActiveTool('AT'); break;
-        case '6': setActiveTool('PR'); break;
-        case 'Escape': setActiveTool(null); break;
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
     if (!currentUser.accessToken) return;
     
@@ -147,21 +87,20 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     setIsUpdating(true);
     setSyncError(false);
     try {
-      const today = getLocalDateString();
-      const todayKey = today.replace(/-/g, '');
-      const uniqueKey = `${todayKey}_${taskId}_${location}`;
-      const existingId = cellIdsRef.current[uniqueKey];
+      const key = `${taskId}_${location}`;
+      const itemId = cellIdsRef.current[key];
       
-      const newId = await SharePointService.updateStatus(currentUser.accessToken, {
-        DataReferencia: today,
-        TarefaID: String(taskId),
+      if (!itemId) throw new Error("ID da célula não mapeado.");
+
+      await SharePointService.updateStatus(currentUser.accessToken, {
+        DataReferencia: getLocalDateString(),
+        TarefaID: taskId,
         OperacaoSigla: location,
         Status: status,
         Usuario: currentUser.name,
-        Title: uniqueKey
-      }, existingId);
+        Title: key
+      }, itemId);
 
-      if (newId) cellIdsRef.current[uniqueKey] = newId;
     } catch (err: any) {
       console.error(`Sync error:`, err);
       setSyncError(true);
@@ -175,31 +114,26 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
-      operations: locations.reduce((acc, loc) => ({...acc, [loc]: activeTool}), {})
+      operations: locations.reduce((acc, loc) => ({...acc, [loc]: activeTool!}), {})
     } : t));
 
     setIsUpdating(true);
-    setSyncError(false);
     try {
-      const today = getLocalDateString();
-      const todayKey = today.replace(/-/g, '');
-      
-      // Sequential for better error tracking
       for (const loc of locations) {
-        const uniqueKey = `${todayKey}_${taskId}_${loc}`;
-        const existingId = cellIdsRef.current[uniqueKey];
-        const newId = await SharePointService.updateStatus(currentUser.accessToken, {
-            DataReferencia: today,
-            TarefaID: String(taskId),
-            OperacaoSigla: loc,
-            Status: activeTool,
-            Usuario: currentUser.name,
-            Title: uniqueKey
-        }, existingId);
-        if (newId) cellIdsRef.current[uniqueKey] = newId;
+        const key = `${taskId}_${loc}`;
+        const itemId = cellIdsRef.current[key];
+        if (itemId) {
+            await SharePointService.updateStatus(currentUser.accessToken, {
+                DataReferencia: getLocalDateString(),
+                TarefaID: taskId,
+                OperacaoSigla: loc,
+                Status: activeTool,
+                Usuario: currentUser.name,
+                Title: key
+            }, itemId);
+        }
       }
-    } catch (err: any) {
-      console.error("Batch update error:", err);
+    } catch (err) {
       setSyncError(true);
     } finally {
       setIsUpdating(false);
@@ -210,6 +144,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     if (!resetResponsible.trim() || !currentUser.accessToken) return;
     setIsUpdating(true);
     try {
+        // Save snapshot to history list
         await SharePointService.saveHistory(currentUser.accessToken, {
             id: Date.now().toString(),
             timestamp: new Date().toISOString(),
@@ -218,29 +153,31 @@ const TaskManager: React.FC<TaskManagerProps> = ({
             email: currentUser.email
         });
         
-        const today = getLocalDateString();
-        const todayKey = today.replace(/-/g, '');
-        
+        // Reset local UI
         setTasks(prev => prev.map(t => ({
             ...t,
             operations: locations.reduce((acc, loc) => ({ ...acc, [loc]: 'PR' }), {})
         })));
 
+        // Reset persistent "Live" status in background
         for (const task of tasks) {
             for (const loc of locations) {
-                const uniqueKey = `${todayKey}_${task.id}_${loc}`;
-                const existingId = cellIdsRef.current[uniqueKey];
-                await SharePointService.updateStatus(currentUser.accessToken!, {
-                    DataReferencia: today,
-                    TarefaID: String(task.id),
-                    OperacaoSigla: loc,
-                    Status: 'PR',
-                    Usuario: resetResponsible,
-                    Title: uniqueKey
-                }, existingId);
+                const key = `${task.id}_${loc}`;
+                const itemId = cellIdsRef.current[key];
+                if (itemId) {
+                    await SharePointService.updateStatus(currentUser.accessToken!, {
+                        DataReferencia: getLocalDateString(),
+                        TarefaID: String(task.id),
+                        OperacaoSigla: loc,
+                        Status: 'PR',
+                        Usuario: resetResponsible,
+                        Title: key
+                    }, itemId);
+                }
             }
         }
         setIsResetModalOpen(false);
+        setResetResponsible('');
     } catch (error: any) {
         alert(`Erro no Reset: ${error.message}`);
     } finally {
@@ -261,7 +198,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const toggleCategory = (cat: string) => {
     if (collapsedCategories.includes(cat)) {
       setCollapsedCategories(prev => prev.filter(c => c !== cat));
-      manuallyOpenedRef.current.add(cat);
     } else {
       setCollapsedCategories(prev => [...prev, cat]);
     }
@@ -342,6 +278,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                     <button onClick={() => setIsResetModalOpen(false)}><X size={24} /></button>
                 </div>
                 <div className="p-6">
+                    <p className="text-sm text-slate-500 mb-6">Esta ação salvará o checklist atual no histórico e voltará todas as tarefas para <b>PENDENTE</b>.</p>
                     <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Quem está realizando o reset?</label>
                     <input 
                       type="text" 
@@ -390,7 +327,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                   </tr>
                   {!isCollapsed && (catTasks as Task[]).map(task => (
                     <tr key={task.id} className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 group">
-                      <td className="p-4 border-r border-slate-100 dark:border-slate-800 sticky left-0 bg-inherit z-30 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]" onClick={() => handlePaintRow(task.id)}>
+                      <td className="p-4 border-r border-slate-100 dark:border-slate-800 sticky left-0 bg-inherit z-30 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)] hover:bg-blue-50 transition-colors cursor-pointer" onClick={() => handlePaintRow(task.id)}>
                         <div className="font-bold text-slate-800 dark:text-slate-100 text-[13px] leading-tight">{task.title}</div>
                         {task.description && <div className="text-[11px] text-slate-500 mt-1">{task.description}</div>}
                       </td>
