@@ -94,8 +94,7 @@ export interface HistoryRecord {
   timestamp: string;
   tasks: Task[];
   resetBy?: string;
-  email?: string;
-  isPartial?: boolean; // Define se é um salvamento de troca de turno (10h) ou reset
+  email?: string; // Novo campo para rastreabilidade e filtro
 }
 
 export const VALID_USERS = [

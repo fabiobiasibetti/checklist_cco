@@ -86,15 +86,6 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
-  async getListMetadata(token: string, listName: string): Promise<{ lastModifiedDateTime: string; id: string }> {
-    const siteId = await getResolvedSiteId(token);
-    const list = await findListByIdOrName(siteId, listName, token);
-    return {
-      lastModifiedDateTime: list.lastModifiedDateTime,
-      id: list.id
-    };
-  },
-
   async getTasks(token: string): Promise<SPTask[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -188,9 +179,8 @@ export const SharePointService = {
     const listName = 'Historico_checklist_web';
     const list = await findListByIdOrName(siteId, listName, token);
 
-    const prefix = record.isPartial ? "[PARCIAL] " : "";
     const fields: any = {
-      Title: prefix + (record.resetBy || "SISTEMA"), 
+      Title: record.resetBy, 
       Data: record.timestamp,
       DadosJSON: JSON.stringify(record.tasks),
       Celula: record.email
@@ -213,18 +203,13 @@ export const SharePointService = {
       const filter = `fields/Celula eq '${userEmail}'`;
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
       
-      return (data.value || []).map((item: any) => {
-        const title = item.fields.Title || "";
-        const isPartial = title.startsWith("[PARCIAL]");
-        return {
-          id: item.fields.id || item.id,
-          timestamp: item.fields.Data,
-          resetBy: isPartial ? title.replace("[PARCIAL] ", "") : title,
-          isPartial: isPartial,
-          email: item.fields.Celula,
-          tasks: JSON.parse(item.fields.DadosJSON || '[]')
-        };
-      }).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      return (data.value || []).map((item: any) => ({
+        id: item.fields.id || item.id,
+        timestamp: item.fields.Data,
+        resetBy: item.fields.Title, 
+        email: item.fields.Celula,
+        tasks: JSON.parse(item.fields.DadosJSON || '[]')
+      })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     } catch (e) { return []; }
   },
 
@@ -237,6 +222,7 @@ export const SharePointService = {
       const colEmail = resolveFieldName(mapping, 'Email');
       const colNome = resolveFieldName(mapping, 'Nome');
       
+      // Filtra pelo e-mail do usuário logado
       const filter = `fields/${colEmail} eq '${email}'`;
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
       

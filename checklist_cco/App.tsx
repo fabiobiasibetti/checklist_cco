@@ -1,13 +1,13 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, RefreshCw, PauseCircle } from 'lucide-react';
+import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import Login from './components/Login';
 import { SharePointService } from './services/sharepointService';
-import { Task, User } from './types';
+import { Task, User, SPTask, SPOperation, SPStatus } from './types';
 import { setCurrentUser as setStorageUser } from './services/storageService';
 
 const SidebarLink = ({ to, icon: Icon, label, active, collapsed }: any) => (
@@ -22,16 +22,9 @@ const AppContent = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [locations, setLocations] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [isSyncPaused, setIsSyncPaused] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [collapsed, setCollapsed] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
-  
-  const partialSaveAttemptedRef = useRef(false);
-  const lastListTimestampRef = useRef<string | null>(null);
-  const isSyncBlockedRef = useRef(false);
-  const cooldownTimeoutRef = useRef<number | null>(null);
   
   const navigate = useNavigate();
 
@@ -44,9 +37,6 @@ const AppContent = () => {
       const spOps = await SharePointService.getOperations(user.accessToken, user.email);
       const today = new Date().toISOString().split('T')[0];
       const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
-
-      const meta = await SharePointService.getListMetadata(user.accessToken, 'Status_Checklist');
-      lastListTimestampRef.current = meta.lastModifiedDateTime;
 
       const opSiglas = spOps.map(o => o.Title);
       setLocations(opSiglas);
@@ -72,11 +62,6 @@ const AppContent = () => {
       });
 
       setTasks(matrixTasks.filter(t => t.active !== false));
-
-      if (!partialSaveAttemptedRef.current) {
-        checkAndTriggerPartialSave(user, matrixTasks.filter(t => t.active !== false));
-        partialSaveAttemptedRef.current = true;
-      }
     } catch (err) {
       console.error("Erro ao carregar SharePoint:", err);
     } finally {
@@ -84,79 +69,10 @@ const AppContent = () => {
     }
   };
 
-  useEffect(() => {
-    if (!currentUser?.accessToken || isLoading) return;
-
-    const syncInterval = setInterval(async () => {
-      if (isSyncing || isSyncBlockedRef.current) return;
-      try {
-        const meta = await SharePointService.getListMetadata(currentUser.accessToken!, 'Status_Checklist');
-        if (meta.lastModifiedDateTime !== lastListTimestampRef.current) {
-          setIsSyncing(true);
-          const today = new Date().toISOString().split('T')[0];
-          const newSpStatus = await SharePointService.getStatusByDate(currentUser.accessToken!, today);
-          setTasks(prevTasks => prevTasks.map(task => {
-            const updatedOps = { ...task.operations };
-            let hasChanged = false;
-            locations.forEach(sigla => {
-              const statusMatch = newSpStatus.find(s => s.TarefaID === task.id && s.OperacaoSigla === sigla);
-              const newStatus = statusMatch ? statusMatch.Status : 'PR';
-              if (updatedOps[sigla] !== newStatus) {
-                updatedOps[sigla] = newStatus;
-                hasChanged = true;
-              }
-            });
-            return hasChanged ? { ...task, operations: updatedOps } : task;
-          }));
-          lastListTimestampRef.current = meta.lastModifiedDateTime;
-          setIsSyncing(false);
-        }
-      } catch (e) {
-        setIsSyncing(false);
-      }
-    }, 6000);
-    return () => clearInterval(syncInterval);
-  }, [currentUser, isLoading, isSyncing, locations]);
-
-  const handleManualSaveComplete = async () => {
-    if (!currentUser?.accessToken) return;
-    isSyncBlockedRef.current = true;
-    setIsSyncPaused(true);
-    if (cooldownTimeoutRef.current) window.clearTimeout(cooldownTimeoutRef.current);
-    cooldownTimeoutRef.current = window.setTimeout(() => {
-        isSyncBlockedRef.current = false;
-        setIsSyncPaused(false);
-        cooldownTimeoutRef.current = null;
-    }, 8000); 
-  };
-
-  const checkAndTriggerPartialSave = async (user: User, currentTasks: Task[]) => {
-    const now = new Date();
-    const hours = now.getHours();
-    if (hours >= 10 && hours < 22) {
-        try {
-            const history = await SharePointService.getHistory(user.accessToken!, user.email);
-            const todayStr = now.toISOString().split('T')[0];
-            const alreadyHasPartial = history.some(h => h.isPartial && h.timestamp.startsWith(todayStr));
-            if (!alreadyHasPartial && currentTasks.length > 0) {
-                await SharePointService.saveHistory(user.accessToken!, {
-                    id: `partial_${Date.now()}`, timestamp: now.toISOString(), tasks: currentTasks, resetBy: user.name, email: user.email, isPartial: true
-                });
-            }
-        } catch (e) {}
-    }
-  };
-
   const handleLogout = () => {
-    // Limpa o cache local
     setUser(null);
     setStorageUser(null);
     delete (window as any).__access_token;
-    
-    // Limpa o cache do MSAL no navegador
-    localStorage.clear(); 
-    sessionStorage.clear();
-    
     navigate('/');
   };
 
@@ -179,13 +95,7 @@ const AppContent = () => {
           <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
           <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
         </nav>
-        
-        <div className={`mt-auto mb-4 p-2 rounded-lg flex items-center justify-center gap-2 transition-colors ${isSyncPaused ? 'text-amber-500 bg-amber-50 dark:bg-amber-900/20' : isSyncing ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'text-slate-400'}`}>
-            {isSyncPaused ? <PauseCircle size={14} /> : <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />}
-            {!collapsed && <span className="text-[10px] font-bold uppercase tracking-tighter">{isSyncPaused ? 'Pausa Segura' : isSyncing ? 'Sincronizando' : 'Em Nuvem'}</span>}
-        </div>
-
-        <div className="space-y-2 border-t pt-4 dark:border-slate-800">
+        <div className="mt-auto space-y-2 border-t pt-4 dark:border-slate-800">
            <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 w-full flex justify-center text-slate-500 hover:bg-slate-100 rounded-lg">
              {isDarkMode ? <Sun size={20}/> : <Moon size={20}/>}
            </button>
@@ -213,8 +123,6 @@ const AppContent = () => {
                 setCollapsedCategories={setCollapsedCategories} 
                 currentUser={currentUser}
                 onLogout={handleLogout}
-                onInteractionStart={() => { isSyncBlockedRef.current = true; setIsSyncPaused(true); }}
-                onInteractionEnd={handleManualSaveComplete}
               />
             } />
             <Route path="/departures" element={<RouteDepartureView />} />
