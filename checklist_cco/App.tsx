@@ -35,10 +35,13 @@ const AppContent = () => {
     try {
       const spTasks = await SharePointService.getTasks(user.accessToken);
       const spOps = await SharePointService.getOperations(user.accessToken, user.email);
-      
-      // Use local date string consistently
       const today = getLocalDateString();
       const spStatus = await SharePointService.getStatusByDate(user.accessToken, today);
+
+      // Pass IDs to the TaskManager internal ref
+      if ((window as any).refreshSpIds) {
+          (window as any).refreshSpIds(spStatus);
+      }
 
       const opSiglas = spOps.map(o => o.Title);
       setLocations(opSiglas);

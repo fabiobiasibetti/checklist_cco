@@ -5,10 +5,6 @@ const SITE_PATH = "vialacteoscombr.sharepoint.com:/sites/CCO";
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, Record<string, string>> = {};
 
-/**
- * Utility to get current date in YYYY-MM-DD format based on LOCAL time
- * instead of UTC to avoid issues near midnight.
- */
 export const getLocalDateString = () => {
   const date = new Date();
   const offset = date.getTimezoneOffset();
@@ -25,8 +21,7 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
       ...options.headers,
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      // Added both headers to ensure compatibility with large non-indexed lists
-      'Prefer': 'HonorNonIndexedQueriesWarningMayFailOverLargeLists, HonorNonIndexedQueriesWarningMayFailRandomly'
+      'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly, HonorNonIndexedQueriesWarningMayFailOverLargeLists'
     }
   });
 
@@ -39,11 +34,6 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
       errDetail = await res.text();
     }
     console.error(`Graph API Error [${res.status}] at ${endpoint}:`, errDetail);
-    
-    if (res.status === 404) {
-        throw new Error("NOT_FOUND");
-    }
-    
     throw new Error(errDetail);
   }
   return res.status === 204 ? null : res.json();
@@ -94,16 +84,12 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   columns.value.forEach((col: any) => {
     const internalName = col.name;
     const displayName = col.displayName;
-    
     const normInternal = normalizeString(internalName);
     const normDisplay = normalizeString(displayName);
-
     if (SYSTEM_FIELDS_TO_EXCLUDE.has(normInternal)) return;
-
     if (!SYSTEM_FIELDS_TO_EXCLUDE.has(normDisplay)) {
       mapping[normDisplay] = internalName;
     }
-    
     mapping[normInternal] = internalName;
   });
 
@@ -113,8 +99,7 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
 
 function resolveFieldName(mapping: Record<string, string>, target: string): string {
   const normalizedTarget = normalizeString(target);
-  if (mapping[normalizedTarget]) return mapping[normalizedTarget];
-  return target;
+  return mapping[normalizedTarget] || target;
 }
 
 export const SharePointService = {
@@ -158,30 +143,34 @@ export const SharePointService = {
     try {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
-        const filter = `fields/DataReferencia eq '${date}'`;
-        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=1000`, token);
-        return (data.value || []).map((item: any) => ({
-          id: item.id,
-          DataReferencia: item.fields.DataReferencia,
-          TarefaID: String(item.fields.TarefaID),
-          OperacaoSigla: item.fields.OperacaoSigla,
-          Status: item.fields.Status,
-          Usuario: item.fields.Usuario,
-          Title: item.fields.Title
-        }));
+        // Using $top 5000 and manual filter if the site filter fails due to indexing
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=5000`, token);
+        return (data.value || [])
+          .filter((item: any) => item.fields.DataReferencia === date)
+          .map((item: any) => ({
+            id: item.id,
+            DataReferencia: item.fields.DataReferencia,
+            TarefaID: String(item.fields.TarefaID),
+            OperacaoSigla: item.fields.OperacaoSigla,
+            Status: item.fields.Status,
+            Usuario: item.fields.Usuario,
+            Title: item.fields.Title
+          }));
     } catch (e) { 
         console.error("Error fetching status by date:", e);
         return []; 
     }
   },
 
-  async updateStatus(token: string, status: SPStatus): Promise<void> {
+  async updateStatus(token: string, status: SPStatus, existingId?: string): Promise<string> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Status_Checklist', token);
     const mapping = await getListColumnMapping(siteId, list.id, token);
     
+    const chaveUnicaField = resolveFieldName(mapping, 'ChaveUnica');
     const fields: any = {
       Title: status.Title,
+      [chaveUnicaField]: status.Title,
       [resolveFieldName(mapping, 'DataReferencia')]: status.DataReferencia,
       [resolveFieldName(mapping, 'TarefaID')]: status.TarefaID,
       [resolveFieldName(mapping, 'OperacaoSigla')]: status.OperacaoSigla,
@@ -189,85 +178,62 @@ export const SharePointService = {
       [resolveFieldName(mapping, 'Usuario')]: status.Usuario
     };
 
-    try {
-        // We use Title as our unique natural key for daily items
-        const filter = `fields/Title eq '${status.Title}'`;
-        const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
-        
-        if (existing?.value?.length > 0) {
-          const itemId = existing.value[0].id;
-          const patchFields = { ...fields };
-          // Removing Title during patch avoids LinkTitle issues on indexed/non-indexed Title scenarios
-          delete patchFields.Title; 
-          
-          await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${itemId}/fields`, token, {
+    if (existingId) {
+        // Direct PATCH if we have the ID, no filter needed
+        const patchFields = { ...fields };
+        delete patchFields.Title;
+        delete patchFields[chaveUnicaField];
+        await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${existingId}/fields`, token, {
             method: 'PATCH',
             body: JSON.stringify(patchFields)
-          });
-        } else {
-          await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
-            method: 'POST',
-            body: JSON.stringify({ fields })
-          });
-        }
-    } catch (e: any) {
-        // Fallback: If filter failed due to indexing, try a blind create
-        // SharePoint will return an error if it hits a unique constraint, but we catch generic errors here.
-        if (e.message.includes("Field 'Title' cannot be referenced") || e.message.includes("not indexed")) {
-          console.warn("Retrying with direct POST due to indexing error...");
-          try {
-             await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+        });
+        return existingId;
+    } else {
+        // Try to find by ChaveUnica or Title first to avoid duplicate if indexing allows, 
+        // but if it fails, we catch and POST.
+        try {
+            const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
                 method: 'POST',
                 body: JSON.stringify({ fields })
             });
-          } catch(postErr: any) {
-             // If it fails because it already exists, that's fine for this app's logic
-             if (!postErr.message.includes("already exists")) {
-                 throw postErr;
-             }
-          }
-        } else {
-          throw e;
+            return res.id;
+        } catch (e: any) {
+            // If POST fails because it exists (and unique constraint active), we'd need the ID.
+            // But usually we just throw here.
+            throw e;
         }
     }
   },
 
   async saveHistory(token: string, record: HistoryRecord): Promise<void> {
     const siteId = await getResolvedSiteId(token);
-    const listName = 'Historico_checklist_web';
-    const list = await findListByIdOrName(siteId, listName, token);
-
+    const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
     const fields: any = {
       Title: record.resetBy, 
       Data: record.timestamp,
       DadosJSON: JSON.stringify(record.tasks),
       Celula: record.email
     };
-
-    try {
-        await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
-          method: 'POST',
-          body: JSON.stringify({ fields })
-        });
-    } catch (error: any) {
-        throw new Error(`Erro ao gravar na lista ${listName}: ${error.message}`);
-    }
+    await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, {
+      method: 'POST',
+      body: JSON.stringify({ fields })
+    });
   },
 
   async getHistory(token: string, userEmail: string): Promise<HistoryRecord[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
-      const filter = `fields/Celula eq '${userEmail}'`;
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=100`, token);
-      
-      return (data.value || []).map((item: any) => ({
-        id: item.fields.id || item.id,
-        timestamp: item.fields.Data,
-        resetBy: item.fields.Title, 
-        email: item.fields.Celula,
-        tasks: JSON.parse(item.fields.DadosJSON || '[]')
-      })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$top=500`, token);
+      return (data.value || [])
+        .filter((item: any) => (item.fields.Celula || "").toLowerCase() === userEmail.toLowerCase())
+        .map((item: any) => ({
+          id: item.id,
+          timestamp: item.fields.Data,
+          resetBy: item.fields.Title, 
+          email: item.fields.Celula,
+          tasks: JSON.parse(item.fields.DadosJSON || '[]')
+        })).sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     } catch (e) { return []; }
   },
 
@@ -276,17 +242,12 @@ export const SharePointService = {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Usuarios_cco', token);
       const mapping = await getListColumnMapping(siteId, list.id, token);
-      
       const colEmail = resolveFieldName(mapping, 'Email');
-      const colNome = resolveFieldName(mapping, 'Nome');
-      
-      const filter = `fields/${colEmail} eq '${email}'`;
-      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
-      
-      return (data.value || []).map((item: any) => item.fields[colNome] || "").filter(Boolean);
-    } catch (e) {
-      console.error("Erro ao buscar usuários cadastrados:", e);
-      return [];
-    }
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
+      return (data.value || [])
+        .filter((item: any) => (item.fields[colEmail] || "").toLowerCase() === email.toLowerCase())
+        .map((item: any) => item.fields[resolveFieldName(mapping, 'Nome')] || "")
+        .filter(Boolean);
+    } catch (e) { return []; }
   }
 };

@@ -7,7 +7,7 @@ import {
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
   Activity, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
-  RotateCcw, Save, UserCheck
+  RotateCcw, Save, UserCheck, WifiOff
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string, color: string, next: OperationStatus, shortcut: string, desc: string }> = {
@@ -43,8 +43,11 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 }) => {
   const [activeTool, setActiveTool] = useState<OperationStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [syncError, setSyncError] = useState(false);
   const [compact, setCompact] = useState(true);
   
+  // Track SP Item IDs locally to avoid filtering Title
+  const cellIdsRef = useRef<Record<string, string>>({});
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetResponsible, setResetResponsible] = useState('');
   const [registeredUsers, setRegisteredUsers] = useState<string[]>([]);
@@ -55,6 +58,28 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   
   const autoCollapsedSessionRef = useRef<Set<string>>(new Set());
   const manuallyOpenedRef = useRef<Set<string>>(new Set());
+
+  // Initialize IDs from existing tasks if they were loaded with IDs
+  useEffect(() => {
+    const today = getLocalDateString().replace(/-/g, '');
+    tasks.forEach(task => {
+        locations.forEach(loc => {
+            const key = `${today}_${task.id}_${loc}`;
+            // If the service loaded status with IDs, we should have them here.
+            // Since our Task type doesn't store IDs per cell, we rely on the 
+            // getStatusByDate call in App.tsx to populate this map.
+        });
+    });
+  }, [tasks, locations]);
+
+  // Expose a way to populate the ID map from App.tsx
+  useEffect(() => {
+      (window as any).refreshSpIds = (statusList: any[]) => {
+          statusList.forEach(s => {
+              cellIdsRef.current[s.Title] = s.id;
+          });
+      };
+  }, []);
 
   const getCategoryStats = (category: string) => {
     const catTasks = tasks.filter(t => (t.category || 'Geral') === category);
@@ -111,51 +136,35 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const handleOpenResetModal = async () => {
-    setIsResetModalOpen(true);
-    setIsLoadingUsers(true);
-    try {
-        const token = currentUser.accessToken || (window as any).__access_token;
-        if (token) {
-            const users = await SharePointService.getRegisteredUsers(token, currentUser.email);
-            setRegisteredUsers(users);
-            if (users.length === 1) setResetResponsible(users[0]);
-            else setResetResponsible('');
-        }
-    } catch (e) {
-        console.error("Erro ao carregar usuários:", e);
-    } finally {
-        setIsLoadingUsers(false);
-    }
-  };
-
   const handleUpdateStatus = async (taskId: string, location: string, status: OperationStatus) => {
     if (!currentUser.accessToken) return;
     
-    const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
       operations: { ...t.operations, [location]: status } 
     } : t));
     
     setIsUpdating(true);
+    setSyncError(false);
     try {
       const today = getLocalDateString();
       const todayKey = today.replace(/-/g, '');
       const uniqueKey = `${todayKey}_${taskId}_${location}`;
+      const existingId = cellIdsRef.current[uniqueKey];
       
-      await SharePointService.updateStatus(currentUser.accessToken, {
+      const newId = await SharePointService.updateStatus(currentUser.accessToken, {
         DataReferencia: today,
         TarefaID: String(taskId),
         OperacaoSigla: location,
         Status: status,
         Usuario: currentUser.name,
         Title: uniqueKey
-      });
+      }, existingId);
+
+      if (newId) cellIdsRef.current[uniqueKey] = newId;
     } catch (err: any) {
-      console.error(`Erro ao sincronizar célula [${taskId}][${location}]:`, err);
-      // Fail silently for small UI glitches, but log the error
-      setIsUpdating(false);
+      console.error(`Sync error:`, err);
+      setSyncError(true);
     } finally {
       setIsUpdating(false);
     }
@@ -164,36 +173,34 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const handlePaintRow = async (taskId: string) => {
     if (!activeTool || !currentUser.accessToken) return;
     
-    const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === taskId ? { 
       ...t, 
       operations: locations.reduce((acc, loc) => ({...acc, [loc]: activeTool}), {})
     } : t));
 
     setIsUpdating(true);
+    setSyncError(false);
     try {
       const today = getLocalDateString();
       const todayKey = today.replace(/-/g, '');
       
-      // Process updates sequentially in small chunks to avoid indexing/concurrency issues
-      const CHUNK_SIZE = 3;
-      for (let i = 0; i < locations.length; i += CHUNK_SIZE) {
-        const chunk = locations.slice(i, i + CHUNK_SIZE);
-        await Promise.all(chunk.map(loc => {
-            const uniqueKey = `${todayKey}_${taskId}_${loc}`;
-            return SharePointService.updateStatus(currentUser.accessToken!, {
-                DataReferencia: today,
-                TarefaID: String(taskId),
-                OperacaoSigla: loc,
-                Status: activeTool!,
-                Usuario: currentUser.name,
-                Title: uniqueKey
-            });
-        }));
+      // Sequential for better error tracking
+      for (const loc of locations) {
+        const uniqueKey = `${todayKey}_${taskId}_${loc}`;
+        const existingId = cellIdsRef.current[uniqueKey];
+        const newId = await SharePointService.updateStatus(currentUser.accessToken, {
+            DataReferencia: today,
+            TarefaID: String(taskId),
+            OperacaoSigla: loc,
+            Status: activeTool,
+            Usuario: currentUser.name,
+            Title: uniqueKey
+        }, existingId);
+        if (newId) cellIdsRef.current[uniqueKey] = newId;
       }
     } catch (err: any) {
       console.error("Batch update error:", err);
-      // We don't alert here to avoid spamming the user if one request in the chunk fails
+      setSyncError(true);
     } finally {
       setIsUpdating(false);
     }
@@ -201,7 +208,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
   const handleResetChecklist = async () => {
     if (!resetResponsible.trim() || !currentUser.accessToken) return;
-    
     setIsUpdating(true);
     try {
         await SharePointService.saveHistory(currentUser.accessToken, {
@@ -215,16 +221,15 @@ const TaskManager: React.FC<TaskManagerProps> = ({
         const today = getLocalDateString();
         const todayKey = today.replace(/-/g, '');
         
-        // Resetting the UI immediately
         setTasks(prev => prev.map(t => ({
             ...t,
             operations: locations.reduce((acc, loc) => ({ ...acc, [loc]: 'PR' }), {})
         })));
 
-        // Background sync
         for (const task of tasks) {
             for (const loc of locations) {
                 const uniqueKey = `${todayKey}_${task.id}_${loc}`;
+                const existingId = cellIdsRef.current[uniqueKey];
                 await SharePointService.updateStatus(currentUser.accessToken!, {
                     DataReferencia: today,
                     TarefaID: String(task.id),
@@ -232,17 +237,12 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                     Status: 'PR',
                     Usuario: resetResponsible,
                     Title: uniqueKey
-                });
+                }, existingId);
             }
         }
-
-        autoCollapsedSessionRef.current.clear();
-        manuallyOpenedRef.current.clear();
         setIsResetModalOpen(false);
-        alert("Checklist resetado e salvo com sucesso!");
     } catch (error: any) {
-        console.error("Erro no Reset:", error);
-        alert(`ERRO: Não foi possível completar o reset no SharePoint: ${error.message}`);
+        alert(`Erro no Reset: ${error.message}`);
     } finally {
         setIsUpdating(false);
     }
@@ -251,27 +251,19 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const onCellInteraction = (taskId: string, loc: string, forcedStatus?: OperationStatus) => {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
-    
     const currentStatus = task.operations[loc] || 'PR';
     const nextStatus = forcedStatus || (activeTool || STATUS_CONFIG[currentStatus].next);
-    
     if (currentStatus !== nextStatus) {
       handleUpdateStatus(taskId, loc, nextStatus);
     }
   };
 
   const toggleCategory = (cat: string) => {
-    const { isComplete } = getCategoryStats(cat);
-    const isCurrentlyCollapsed = collapsedCategories.includes(cat);
-
-    if (isCurrentlyCollapsed) {
-      setCollapsedCategories((prev: string[]) => prev.filter(c => c !== cat));
-      if (isComplete) manuallyOpenedRef.current.add(cat);
+    if (collapsedCategories.includes(cat)) {
+      setCollapsedCategories(prev => prev.filter(c => c !== cat));
+      manuallyOpenedRef.current.add(cat);
     } else {
-      if (isComplete) {
-        setCollapsedCategories((prev: string[]) => [...prev, cat]);
-        manuallyOpenedRef.current.delete(cat);
-      }
+      setCollapsedCategories(prev => [...prev, cat]);
     }
   };
 
@@ -284,21 +276,23 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden relative font-sans transition-colors duration-500">
-      {/* HEADER / TOOLBAR */}
+      {/* HEADER */}
       <div className="px-4 py-3 border-b dark:border-slate-800 flex flex-col xl:flex-row justify-between items-center bg-gray-50/80 dark:bg-slate-800/80 backdrop-blur-md gap-3 shrink-0 z-50">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-blue-600 rounded-lg text-white shadow-lg shadow-blue-500/20">
               <Activity size={20} />
             </div>
-            <h2 className="text-lg font-bold text-gray-800 dark:text-white whitespace-nowrap">
-              Checklist CCO
-            </h2>
+            <h2 className="text-lg font-bold text-gray-800 dark:text-white whitespace-nowrap">Checklist CCO</h2>
           </div>
           <div className="h-6 w-px bg-gray-300 dark:bg-slate-700 hidden md:block" />
           {isUpdating ? (
             <div className="flex items-center gap-2 text-[10px] text-blue-500 animate-pulse font-black uppercase tracking-widest">
               <Loader2 size={12} className="animate-spin"/> Gravando
+            </div>
+          ) : syncError ? (
+            <div className="flex items-center gap-2 text-[10px] text-red-500 font-bold uppercase tracking-widest">
+              <WifiOff size={12}/> Erro de Sincronia
             </div>
           ) : (
             <div className="flex items-center gap-2 text-[10px] text-green-500 font-bold uppercase tracking-widest">
@@ -322,211 +316,105 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                   title={`${cfg.desc} [${cfg.shortcut}]`}
                 >
                   {cfg.label}
-                  <span className="absolute -bottom-4 text-[8px] text-slate-400 opacity-0 group-hover:opacity-100 font-mono">{cfg.shortcut}</span>
                 </button>
               ))}
             </div>
           </div>
 
           <div className="flex items-center gap-1">
-            <button 
-              onClick={handleOpenResetModal}
-              className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-all border border-amber-100 dark:border-amber-800 shadow-sm"
-              title="Resetar Checklist e Salvar no SharePoint"
-            >
+            <button onClick={() => setIsResetModalOpen(true)} className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 border border-amber-100 dark:border-amber-800">
               <RotateCcw size={18} />
               <span className="text-xs font-bold hidden sm:inline">Resetar</span>
             </button>
-            <button onClick={() => setCompact(!compact)} className={`p-2 rounded-xl transition-all ${!compact ? 'bg-blue-100 text-blue-600 dark:bg-blue-900' : 'text-slate-400 hover:bg-slate-100'}`} title="Modo Visualização">
-              {compact ? <Maximize2 size={18}/> : <Minimize2 size={18}/>}
-            </button>
-            <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-2" />
-            <button onClick={onLogout} className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl hover:bg-red-100 transition-all font-bold text-xs">
+            <button onClick={onLogout} className="flex items-center gap-2 px-3 py-1.5 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl hover:bg-red-100 font-bold text-xs">
                 <LogOut size={16}/> Sair
             </button>
           </div>
         </div>
       </div>
 
-      {/* RESET MODAL */}
+      {/* MODAL RESET */}
       {isResetModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border dark:border-slate-700">
-                <div className="bg-amber-700 dark:bg-slate-800 text-white p-4 flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                        <div className="p-2 bg-amber-600 rounded-lg">
-                            <RotateCcw size={20} />
-                        </div>
-                        <div>
-                            <h3 className="font-bold text-lg">Resetar Checklist</h3>
-                            <p className="text-[10px] text-amber-200 uppercase tracking-tighter">Snapshot será salvo no SharePoint</p>
-                        </div>
-                    </div>
-                    <button onClick={() => setIsResetModalOpen(false)} className="hover:bg-white/10 p-1 rounded-full transition-colors">
-                        <X size={24} />
-                    </button>
+                <div className="bg-amber-700 p-4 text-white flex justify-between items-center">
+                    <h3 className="font-bold text-lg">Resetar Checklist</h3>
+                    <button onClick={() => setIsResetModalOpen(false)}><X size={24} /></button>
                 </div>
-                <div className="p-6 bg-gray-50 dark:bg-slate-900">
-                    <div className="mb-6">
-                        <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2">Quem está realizando o reset?</label>
-                        
-                        <div className="relative">
-                            {isLoadingUsers ? (
-                                <div className="flex items-center gap-2 p-3 bg-white dark:bg-slate-800 border dark:border-slate-700 rounded-xl text-slate-400 text-sm italic">
-                                    <Loader2 size={16} className="animate-spin" /> Buscando nomes cadastrados...
-                                </div>
-                            ) : registeredUsers.length > 0 ? (
-                                <select 
-                                    value={resetResponsible}
-                                    onChange={(e) => setResetResponsible(e.target.value)}
-                                    className="w-full p-3 pr-10 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-sm dark:text-white focus:ring-2 focus:ring-amber-500 outline-none appearance-none font-bold shadow-sm"
-                                    autoFocus
-                                >
-                                    <option value="">Selecione seu nome...</option>
-                                    {registeredUsers.map(name => (
-                                        <option key={name} value={name}>{name}</option>
-                                    ))}
-                                </select>
-                            ) : (
-                                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900 rounded-xl text-red-600 dark:text-red-400 text-xs flex flex-col gap-2">
-                                    <div className="flex items-center gap-2 font-bold uppercase">
-                                        <AlertCircle size={16} /> Usuário não autorizado
-                                    </div>
-                                    <p className="opacity-80">Nenhum nome encontrado para o e-mail: <b>{currentUser.email}</b> na lista 'Usuarios_cco'.</p>
-                                </div>
-                            )}
-                            {!isLoadingUsers && registeredUsers.length > 0 && (
-                                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                                    <ChevronDown size={18} />
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
+                <div className="p-6">
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Quem está realizando o reset?</label>
+                    <input 
+                      type="text" 
+                      value={resetResponsible} 
+                      onChange={e => setResetResponsible(e.target.value)}
+                      className="w-full p-3 border rounded-xl dark:bg-slate-800 dark:text-white"
+                      placeholder="Seu nome..."
+                    />
                     <div className="flex gap-3 mt-8">
-                        <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-3 bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-gray-200 font-bold rounded-xl hover:bg-gray-300 dark:hover:bg-slate-600 transition-colors">Cancelar</button>
-                        <button 
-                            onClick={handleResetChecklist} 
-                            disabled={!resetResponsible.trim() || isUpdating || isLoadingUsers} 
-                            className="flex-[2] py-3 bg-amber-600 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 transition-all hover:bg-amber-700 active:scale-95"
-                        >
-                            {isUpdating ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
-                            Confirmar Reset
-                        </button>
+                        <button onClick={() => setIsResetModalOpen(false)} className="flex-1 py-3 bg-gray-200 rounded-xl">Cancelar</button>
+                        <button onClick={handleResetChecklist} disabled={!resetResponsible.trim() || isUpdating} className="flex-[2] py-3 bg-amber-600 text-white font-bold rounded-xl shadow-lg">Confirmar Reset</button>
                     </div>
                 </div>
              </div>
         </div>
       )}
 
-      {/* MAIN TABLE AREA */}
-      <div className="flex-1 overflow-auto bg-slate-100 dark:bg-slate-950 transition-colors duration-500 scrollbar-thin">
-        {tasks.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center p-12 text-center">
-                <Database size={48} className="text-blue-600 mb-6 opacity-20"/>
-                <h3 className="text-lg font-black dark:text-white mb-2">Nenhuma tarefa encontrada</h3>
-            </div>
-        ) : (
-            <table className={`min-w-full border-separate border-spacing-0 select-none ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
-              <thead className="sticky top-0 z-[40]">
-                <tr className="bg-blue-900 dark:bg-blue-950 text-white shadow-xl">
-                  <th className="p-3 border-r border-blue-800 dark:border-blue-900 text-left sticky left-0 bg-blue-900 dark:bg-blue-950 z-[45] min-w-[350px] shadow-[4px_0_12px_-4px_rgba(0,0,0,0.4)] font-black uppercase tracking-widest text-[9px]">
-                    Ação / Descrição da Tarefa
-                  </th>
-                  {locations.map(loc => (
-                    <th key={loc} className="p-3 border-r border-blue-800 dark:border-blue-900 w-24 text-center font-bold">
-                      {loc.replace('LAT-', '').replace('ITA-', '')}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {(Object.entries(groupedTasks) as [string, Task[]][]).map(([cat, catTasks]) => {
-                  const isCollapsed = collapsedCategories.includes(cat);
-                  const { percent, isComplete } = getCategoryStats(cat);
-                  const canBeMinimized = isComplete || isCollapsed;
-                  
-                  return (
-                    <React.Fragment key={cat}>
-                      <tr 
-                        className={`bg-blue-600 dark:bg-blue-900 text-white transition-colors h-10 group relative overflow-hidden cursor-pointer ${!canBeMinimized ? 'opacity-90' : 'hover:bg-blue-700'}`} 
-                        onClick={() => toggleCategory(cat)}
-                      >
-                        <td colSpan={locations.length + 1} className="p-0 border-y border-blue-700 sticky left-0 z-30 overflow-hidden">
-                          <div className={`absolute inset-y-0 left-0 transition-all duration-1000 pointer-events-none ${isComplete ? 'bg-green-500' : 'bg-blue-400'}`} style={{ width: `${percent}%` }} />
-                          <div className="absolute inset-0 px-4 flex items-center justify-between z-10 pointer-events-auto">
-                            <div className="flex items-center gap-3">
-                              {isCollapsed ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}
-                              <span className="text-[10px] font-black uppercase tracking-widest">{cat}</span>
-                            </div>
-                            <span className="text-[9px] font-black bg-black/20 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                                {isComplete && <CheckCircle size={10} />}
-                                {percent}% {isComplete ? '(FINALIZADO)' : ''}
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                      {!isCollapsed && catTasks.map(task => (
-                        <tr key={task.id} className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800/50 hover:bg-blue-50/30 dark:hover:bg-slate-800/50 transition-colors group">
+      {/* TABLE */}
+      <div className="flex-1 overflow-auto bg-slate-100 dark:bg-slate-950 scrollbar-thin">
+        <table className={`min-w-full border-separate border-spacing-0 select-none ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+          <thead className="sticky top-0 z-[40]">
+            <tr className="bg-blue-900 dark:bg-blue-950 text-white shadow-xl">
+              <th className="p-3 border-r border-blue-800 text-left sticky left-0 bg-blue-900 dark:bg-blue-950 z-[45] min-w-[350px] shadow-[4px_0_12px_-4px_rgba(0,0,0,0.4)] font-black uppercase tracking-widest text-[9px]">Ação / Tarefa</th>
+              {locations.map(loc => (
+                <th key={loc} className="p-3 border-r border-blue-800 w-24 text-center font-bold">{loc.replace('LAT-', '').replace('ITA-', '')}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(groupedTasks).map(([cat, catTasks]) => {
+              const isCollapsed = collapsedCategories.includes(cat);
+              const { percent, isComplete } = getCategoryStats(cat);
+              return (
+                <React.Fragment key={cat}>
+                  <tr className="bg-blue-600 dark:bg-blue-900 text-white h-10 cursor-pointer" onClick={() => toggleCategory(cat)}>
+                    <td colSpan={locations.length + 1} className="p-0 border-y border-blue-700 sticky left-0 z-30 overflow-hidden relative">
+                      <div className={`absolute inset-y-0 left-0 transition-all duration-1000 ${isComplete ? 'bg-green-500' : 'bg-blue-400'}`} style={{ width: `${percent}%` }} />
+                      <div className="absolute inset-0 px-4 flex items-center justify-between z-10">
+                        <div className="flex items-center gap-3">
+                          {isCollapsed ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}
+                          <span className="text-[10px] font-black uppercase tracking-widest">{cat}</span>
+                        </div>
+                        <span className="text-[9px] font-black">{percent}% {isComplete ? '(FINALIZADO)' : ''}</span>
+                      </div>
+                    </td>
+                  </tr>
+                  {!isCollapsed && (catTasks as Task[]).map(task => (
+                    <tr key={task.id} className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 group">
+                      <td className="p-4 border-r border-slate-100 dark:border-slate-800 sticky left-0 bg-inherit z-30 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)]" onClick={() => handlePaintRow(task.id)}>
+                        <div className="font-bold text-slate-800 dark:text-slate-100 text-[13px] leading-tight">{task.title}</div>
+                        {task.description && <div className="text-[11px] text-slate-500 mt-1">{task.description}</div>}
+                      </td>
+                      {locations.map(loc => {
+                        const status = task.operations[loc] || 'PR';
+                        const cfg = STATUS_CONFIG[status];
+                        return (
                           <td 
-                            className={`p-4 border-r border-slate-100 dark:border-slate-800 sticky left-0 bg-inherit z-30 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.1)] transition-all ${activeTool ? 'cursor-crosshair hover:bg-blue-50 dark:hover:bg-blue-900/20' : ''}`}
-                            onClick={() => handlePaintRow(task.id)}
+                            key={loc} 
+                            className="p-0 border-r border-slate-100 dark:border-slate-800 h-12 relative" 
+                            onMouseDown={() => { setIsDragging(true); onCellInteraction(task.id, loc); paintedThisDrag.current.add(`${task.id}-${loc}`); }}
+                            onMouseEnter={() => { if (isDragging && !paintedThisDrag.current.has(`${task.id}-${loc}`)) { onCellInteraction(task.id, loc, activeTool || undefined); paintedThisDrag.current.add(`${task.id}-${loc}`); } }}
                           >
-                            <div className="flex flex-col gap-1.5">
-                                <div className="font-bold text-slate-800 dark:text-slate-100 text-[13px] leading-tight">{task.title}</div>
-                                {task.description && (
-                                  <div className="text-[11px] font-normal text-slate-500 dark:text-slate-400 leading-snug whitespace-pre-wrap opacity-90">
-                                      {task.description}
-                                  </div>
-                                )}
-                            </div>
-                            {activeTool && <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100"><PaintBucket size={14} className="text-blue-500" /></div>}
+                            <div className={`absolute inset-[3px] rounded-lg flex items-center justify-center transition-all font-black text-[10px] ${cfg.color} cursor-pointer`}>{cfg.label}</div>
                           </td>
-                          {locations.map(loc => {
-                            const status = task.operations[loc] || 'PR';
-                            const cfg = STATUS_CONFIG[status];
-                            return (
-                              <td 
-                                key={loc} 
-                                className="p-0 border-r border-slate-100 dark:border-slate-800 h-12 relative" 
-                                onMouseDown={() => {
-                                    setIsDragging(true);
-                                    onCellInteraction(task.id, loc);
-                                    paintedThisDrag.current.add(`${task.id}-${loc}`);
-                                }}
-                                onMouseEnter={() => {
-                                    if (isDragging && !paintedThisDrag.current.has(`${task.id}-${loc}`)) {
-                                        onCellInteraction(task.id, loc, activeTool || undefined);
-                                        paintedThisDrag.current.add(`${task.id}-${loc}`);
-                                    }
-                                }}
-                              >
-                                <div className={`absolute inset-[3px] rounded-lg flex items-center justify-center transition-all duration-200 font-black text-[10px] ${cfg.color} hover:brightness-95 active:scale-90 shadow-sm cursor-pointer`}>
-                                  {cfg.label}
-                                </div>
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-        )}
-      </div>
-
-      <div className="px-4 py-2 bg-white dark:bg-slate-900 border-t dark:border-slate-800 flex justify-between items-center text-[9px] text-slate-400 font-bold uppercase tracking-widest shrink-0">
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div>
-                Operador: {currentUser.name}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-              <HelpCircle size={10} className="text-blue-500"/> Atalhos: (1-6) Pintar, (Arraste) Pintura Contínua, (Título) Pintar Linha
-          </div>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
