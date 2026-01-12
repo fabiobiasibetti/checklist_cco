@@ -1,11 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RouteDeparture, User, RouteOperationMapping } from '../types';
 import { SharePointService } from '../services/sharepointService';
-import { parseRouteDepartures, parseRouteDeparturesManual } from '../services/geminiService';
+import { parseRouteDeparturesManual } from '../services/geminiService';
+// Added Sparkles to the import list from lucide-react
 import { 
   Plus, Trash2, Save, Clock, X, Upload, 
   Loader2, RefreshCw, ShieldCheck, FileSpreadsheet,
-  AlertTriangle, Link, CheckCircle2, ChevronRight, ChevronDown, Sparkles
+  AlertTriangle, Link, CheckCircle2, ChevronDown, 
+  Filter, Search, Check, CheckSquare, Square,
+  Sparkles
 } from 'lucide-react';
 
 interface RouteConfig {
@@ -27,26 +31,32 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [importText, setImportText] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  // Filter States
+  const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
+
   const [pendingItems, setPendingItems] = useState<Partial<RouteDeparture>[]>([]);
 
   const [colWidths, setColWidths] = useState<Record<string, number>>({
-    semana: 80,
+    semana: 90,
     rota: 120,
     data: 140,
-    inicio: 100,
+    inicio: 110,
     motorista: 260,
     placa: 110,
-    saida: 100,
-    motivo: 140,
-    observacao: 300,
-    geral: 70,
-    aviso: 70,
-    operacao: 150,
-    status: 90,
-    tempo: 90,
+    saida: 110,
+    motivo: 150,
+    observacao: 320,
+    geral: 80,
+    aviso: 80,
+    operacao: 160,
+    status: 100,
+    tempo: 100,
   });
 
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
+  const filterRef = useRef<HTMLDivElement>(null);
 
   const getAccessToken = () => (window as any).__access_token;
 
@@ -90,7 +100,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         return route;
       });
 
-      // Se houver rotas sem operação, força o popup
       const itemsToLink = fixedData.filter(r => !r.operacao || r.operacao === "");
       if (itemsToLink.length > 0) {
           setPendingItems(itemsToLink);
@@ -112,23 +121,30 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const handleMouseMove = (e: MouseEvent) => {
       if (resizingRef.current) {
         const { col, startX, startWidth } = resizingRef.current;
-        const newWidth = Math.max(40, startWidth + (e.clientX - startX));
+        const newWidth = Math.max(50, startWidth + (e.clientX - startX));
         setColWidths(prev => ({ ...prev, [col]: newWidth }));
       }
     };
 
     const handleMouseUp = () => {
       resizingRef.current = null;
-      document.body.style.cursor = 'default';
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+        if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+            setActiveFilterCol(null);
+        }
     };
 
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('mousedown', handleClickOutside);
     
     return () => {
       clearInterval(timer);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousedown', handleClickOutside);
     };
   }, [currentUser]);
 
@@ -139,7 +155,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       startX: e.clientX,
       startWidth: colWidths[col]
     };
-    document.body.style.cursor = 'col-resize';
   };
 
   const formatTimeInput = (value: string): string => {
@@ -235,6 +250,28 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  // Advanced Filtering Logic
+  // Fix: Explicitly cast values from Object.entries to their expected types to avoid "unknown" type errors
+  const filteredRoutes = useMemo(() => {
+    return routes.filter(r => {
+        return Object.entries(colFilters).every(([col, val]) => {
+            if (!val) return true;
+            const field = r[col as keyof RouteDeparture]?.toString().toLowerCase() || "";
+            return field.includes((val as string).toLowerCase());
+        }) && Object.entries(selectedFilters).every(([col, values]) => {
+            const vals = values as string[];
+            if (!vals || vals.length === 0) return true;
+            const field = r[col as keyof RouteDeparture]?.toString() || "";
+            return vals.includes(field);
+        });
+    });
+  }, [routes, colFilters, selectedFilters]);
+
+  const uniqueValuesForCol = (col: string) => {
+    const vals = Array.from(new Set(routes.map(r => r[col as keyof RouteDeparture]?.toString() || "")));
+    return vals.sort();
   };
 
   const handleImport = async () => {
@@ -373,15 +410,61 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === route.operacao.toUpperCase().trim());
     const { isOutOfTolerance } = calculateGap(route.inicio, route.saida, config?.tolerancia);
     
-    if (route.saida !== '00:00:00' && isOutOfTolerance) return 'bg-orange-600 text-white font-black shadow-inner';
+    if (route.saida !== '00:00:00' && isOutOfTolerance) return 'bg-[#FF4500] text-white font-black';
     
     const toleranceSec = timeToSeconds(config?.tolerancia || "00:00:00");
     const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
     const scheduledStartSec = timeToSeconds(route.inicio);
     
-    if (route.saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) return 'bg-yellow-400 text-slate-900 font-black shadow-inner animate-pulse-subtle';
+    if (route.saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) return 'bg-[#FFD700] text-slate-900 font-black';
     
-    return 'bg-white text-slate-700';
+    return 'bg-white text-slate-800';
+  };
+
+  const FilterDropdown = ({ col }: { col: string }) => {
+    const values = uniqueValuesForCol(col);
+    // Fix: Cast selectedFilters access to string[] to resolve Error 449
+    const selected = (selectedFilters[col] as string[]) || [];
+
+    const toggleValue = (val: string) => {
+        const current = (selectedFilters[col] as string[]) || [];
+        if (current.includes(val)) {
+            setSelectedFilters({ ...selectedFilters, [col]: current.filter(v => v !== val) });
+        } else {
+            setSelectedFilters({ ...selectedFilters, [col]: [...current, val] });
+        }
+    };
+
+    return (
+        <div ref={filterRef} className="absolute top-10 left-0 z-50 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 shadow-2xl rounded-2xl w-64 p-4 text-slate-800 animate-in fade-in slide-in-from-top-2">
+            <div className="flex items-center gap-2 mb-4 p-2 bg-slate-50 dark:bg-slate-950 rounded-xl border dark:border-slate-800">
+                <Search size={14} className="text-slate-400" />
+                <input 
+                    type="text" 
+                    placeholder="Filtrar texto..." 
+                    value={colFilters[col] || ""}
+                    onChange={e => setColFilters({ ...colFilters, [col]: e.target.value })}
+                    className="w-full bg-transparent outline-none text-[11px] font-bold dark:text-white"
+                />
+            </div>
+            <div className="max-h-48 overflow-y-auto space-y-1 mb-4 scrollbar-thin">
+                {values.map(v => (
+                    <div 
+                        key={v} 
+                        onClick={() => toggleValue(v)}
+                        className="flex items-center gap-3 p-2 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-lg cursor-pointer transition-colors"
+                    >
+                        {selected.includes(v) ? <CheckSquare size={16} className="text-blue-600" /> : <Square size={16} className="text-slate-300" />}
+                        <span className="text-[10px] font-black uppercase tracking-tight dark:text-slate-300 truncate">{v || "(vazio)"}</span>
+                    </div>
+                ))}
+            </div>
+            <div className="flex gap-2">
+                <button onClick={() => { setColFilters({ ...colFilters, [col]: "" }); setSelectedFilters({ ...selectedFilters, [col]: [] }); }} className="flex-1 py-2 text-[10px] font-black uppercase text-red-500 hover:bg-red-50 rounded-lg">Limpar</button>
+                <button onClick={() => setActiveFilterCol(null)} className="flex-1 py-2 bg-blue-600 text-white text-[10px] font-black uppercase rounded-lg">Aplicar</button>
+            </div>
+        </div>
+    );
   };
 
   if (isLoading) return (
@@ -396,7 +479,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       {/* HEADER */}
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
-          <div className="p-3 bg-blue-600 text-white rounded-2xl shadow-2xl">
+          <div className="p-3 bg-blue-600 text-white rounded-2xl shadow-2xl ring-4 ring-blue-600/10">
             <Clock size={24} />
           </div>
           <div>
@@ -406,7 +489,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             </h2>
             <div className="flex items-center gap-2">
                 <ShieldCheck size={14} className="text-emerald-500"/>
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Operação Ativa: {currentUser.name}</p>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">CCO Logística: {currentUser.name}</p>
             </div>
           </div>
         </div>
@@ -423,10 +506,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       </div>
 
-      {/* GRADE BRANCA */}
-      <div className="flex-1 overflow-auto bg-white rounded-2xl border border-slate-800 shadow-2xl relative scrollbar-thin">
+      {/* EXCEL HD GRID */}
+      <div className="flex-1 overflow-auto bg-white rounded-2xl border-2 border-slate-800 shadow-2xl relative scrollbar-thin">
         <table className="border-collapse table-fixed w-full min-w-max">
-          <thead className="sticky top-0 z-20 bg-blue-600 text-white">
+          <thead className="sticky top-0 z-40 bg-blue-600 text-white">
             <tr className="border-none h-12">
               {[
                 { id: 'semana', label: 'SEMANA' },
@@ -447,82 +530,100 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 <th 
                   key={col.id} 
                   style={{ width: colWidths[col.id] }}
-                  className="relative p-2 text-[10px] font-black uppercase tracking-widest text-center select-none group border-r border-blue-500/30"
+                  className="relative p-2 text-[10px] font-black uppercase tracking-widest text-left select-none group border-r border-blue-400"
                 >
-                  {col.label}
+                  <div className="flex items-center justify-between px-2">
+                    <span className="truncate">{col.label}</span>
+                    <button 
+                        onClick={() => setActiveFilterCol(activeFilterCol === col.id ? null : col.id)}
+                        className={`p-1 rounded hover:bg-white/20 transition-all ${(colFilters[col.id] || (selectedFilters[col.id] as string[])?.length > 0) ? 'text-yellow-300' : 'text-white/60'}`}
+                    >
+                        <Filter size={12} fill={(colFilters[col.id] || (selectedFilters[col.id] as string[])?.length > 0) ? 'currentColor' : 'none'} />
+                    </button>
+                  </div>
+                  {activeFilterCol === col.id && <FilterDropdown col={col.id} />}
                   <div 
                     onMouseDown={(e) => startResize(e, col.id)}
-                    className="absolute right-0 top-2 bottom-2 w-1.5 cursor-col-resize hover:bg-white transition-colors z-10 flex items-center justify-center"
-                  >
-                     <div className="w-[1px] h-full bg-blue-400 group-hover:bg-white" />
-                  </div>
+                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10"
+                  />
                 </th>
               ))}
-              <th className="p-3 w-12 sticky right-0 bg-blue-600"></th>
+              <th className="p-3 w-12 sticky right-0 bg-blue-600 border-l border-blue-400"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
-            {routes.map((route) => {
+          <tbody className="divide-y divide-slate-200">
+            {filteredRoutes.map((route) => {
               const rowClass = getRowClass(route);
-              const isAlert = rowClass.includes('bg-orange') || rowClass.includes('bg-yellow');
+              const isAlert = rowClass.includes('bg-[#FF');
               
-              const inputClass = `w-full h-full bg-transparent outline-none border-none p-2.5 text-center transition-all focus:bg-blue-500/10 ${isAlert ? 'placeholder-white/50 text-inherit' : 'text-slate-700 placeholder-slate-300'}`;
+              const baseInputClass = `w-full h-full bg-transparent outline-none border-none p-3 text-center transition-all focus:bg-blue-500/10 text-xs font-black uppercase tracking-tight ${isAlert ? 'text-white' : 'text-slate-800'}`;
 
               return (
-                <tr key={route.id} className={`${rowClass} group hover:brightness-95 transition-all h-11 text-[11px] font-medium`}>
-                  <td className="p-0 border-r border-slate-100 text-center font-black bg-slate-50/20">{route.semana}</td>
-                  <td className="p-0 border-r border-slate-100">
-                    <input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={inputClass} />
+                <tr key={route.id} className={`${rowClass} group hover:brightness-95 transition-all h-12 border-b border-slate-200`}>
+                  <td className="p-0 border-r border-slate-200 text-center font-black bg-slate-50/20">{route.semana}</td>
+                  <td className="p-0 border-r border-slate-200">
+                    <input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={baseInputClass} />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className={`${inputClass} text-[10px]`} />
+                  <td className="p-0 border-r border-slate-200">
+                    <input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className={`${baseInputClass} text-[10px]`} />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id, 'inicio', e.target.value)} defaultValue={route.inicio} className={`${inputClass} font-mono`} placeholder="00:00" />
+                  <td className="p-0 border-r border-slate-200">
+                    <input 
+                        type="text" 
+                        defaultValue={route.inicio} 
+                        onBlur={(e) => updateCell(route.id, 'inicio', e.target.value)} 
+                        className={`${baseInputClass} font-mono`} 
+                        placeholder="00:00" 
+                    />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value.toUpperCase())} className={`${inputClass} text-left uppercase font-black px-4`} />
+                  <td className="p-0 border-r border-slate-200">
+                    <input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value.toUpperCase())} className={`${baseInputClass} text-left px-4`} />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value.toUpperCase())} className={`${inputClass} font-black tracking-widest`} />
+                  <td className="p-0 border-r border-slate-200">
+                    <input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value.toUpperCase())} className={`${baseInputClass} tracking-widest`} />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    {/* Fixed typo below: changed inputStyle to inputClass */}
-                    <input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} defaultValue={route.saida} className={`${inputClass} font-mono`} placeholder="00:00" />
+                  <td className="p-0 border-r border-slate-200">
+                    <input 
+                        type="text" 
+                        defaultValue={route.saida} 
+                        onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} 
+                        className={`${baseInputClass} font-mono`} 
+                        placeholder="00:00" 
+                    />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full h-full bg-transparent outline-none p-1 text-center cursor-pointer appearance-none font-bold">
-                      <option value="">Selecione...</option>
+                  <td className="p-0 border-r border-slate-200">
+                    <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className={`${baseInputClass} cursor-pointer appearance-none`}>
+                      <option value="" className="text-slate-900">Selecione...</option>
                       {['Manutenção', 'Mão de obra', 'Atraso coleta', 'Atraso carregamento', 'Fábrica', 'Infraestrutura', 'Logística', 'Outros'].map(m => (
-                        <option key={m} value={m}>{m}</option>
+                        <option key={m} value={m} className="text-slate-900">{m}</option>
                       ))}
                     </select>
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <input type="text" value={route.observacao} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} className={`${inputClass} text-left italic px-4`} placeholder="..." />
+                  <td className="p-0 border-r border-slate-200">
+                    <input type="text" value={route.observacao} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} className={`${baseInputClass} text-left italic px-4`} placeholder="..." />
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent outline-none p-1 text-center font-black appearance-none">
-                      <option value="OK">OK</option>
-                      <option value="NOK">NOK</option>
+                  <td className="p-0 border-r border-slate-200">
+                    <select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className={`${baseInputClass} appearance-none`}>
+                      <option value="OK" className="text-slate-900">OK</option>
+                      <option value="NOK" className="text-slate-900">NOK</option>
                     </select>
                   </td>
-                  <td className="p-0 border-r border-slate-100">
-                    <select value={route.aviso} onChange={(e) => updateCell(route.id, 'aviso', e.target.value)} className="w-full h-full bg-transparent outline-none p-1 text-center font-black appearance-none">
-                      <option value="SIM">SIM</option>
-                      <option value="NÃO">NÃO</option>
+                  <td className="p-0 border-r border-slate-200">
+                    <select value={route.aviso} onChange={(e) => updateCell(route.id, 'aviso', e.target.value)} className={`${baseInputClass} appearance-none`}>
+                      <option value="SIM" className="text-slate-900">SIM</option>
+                      <option value="NÃO" className="text-slate-900">NÃO</option>
                     </select>
                   </td>
-                  <td className="p-2 border-r border-slate-100 text-center font-black uppercase text-[9px] truncate">
+                  <td className="p-2 border-r border-slate-200 text-center font-black uppercase text-[9px] truncate">
                       {route.operacao || <span className="text-red-600 animate-pulse underline">VINCULAR</span>}
                   </td>
-                  <td className="p-2 border-r border-slate-100 text-center">
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-black ${route.statusOp === 'OK' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+                  <td className="p-2 border-r border-slate-200 text-center">
+                    <span className={`px-2 py-0.5 rounded text-[9px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-600 border-emerald-700 text-white' : 'bg-red-600 border-red-700 text-white'}`}>
                       {route.statusOp}
                     </span>
                   </td>
-                  <td className="p-2 border-r border-slate-100 text-center font-mono font-black">{route.tempo}</td>
-                  <td className="p-2 sticky right-0 bg-white group-hover:bg-slate-50 transition-colors shadow-[-4px_0_8px_rgba(0,0,0,0.05)]">
+                  <td className="p-2 border-r border-slate-200 text-center font-mono font-black">{route.tempo}</td>
+                  <td className="p-2 sticky right-0 bg-white group-hover:bg-slate-50 transition-colors shadow-[-4px_0_8px_rgba(0,0,0,0.05)] text-center">
                     <button onClick={() => removeRow(route.id)} className="text-slate-300 hover:text-red-600 p-1.5 transition-colors">
                       <Trash2 size={16} />
                     </button>
@@ -534,73 +635,67 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </table>
       </div>
 
-      {/* VINCULATION MODAL (MODO BLACK) */}
+      {/* VINCULATION MODAL (COMPACT) */}
       {isLinkModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xl z-[110] flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-[3rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-300">
-                <div className="bg-blue-600 p-8 flex justify-between items-center text-white shadow-2xl">
-                    <div className="flex items-center gap-4">
-                        <Link size={32} className="bg-white/20 p-2 rounded-2xl" />
+        <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-2xl z-[110] flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] shadow-[0_0_100px_rgba(37,99,235,0.2)] w-full max-w-xl max-h-[85vh] overflow-hidden animate-in zoom-in duration-300 flex flex-col">
+                <div className="bg-blue-600 p-6 flex justify-between items-center text-white shrink-0">
+                    <div className="flex items-center gap-3">
+                        <Link size={24} className="bg-white/20 p-2 rounded-xl" />
                         <div>
-                            <h3 className="font-black uppercase tracking-widest text-lg">Mapeamento de Rotas</h3>
-                            <p className="text-blue-200 text-xs font-bold mt-1 tracking-tight">Vincule as novas rotas detectadas</p>
+                            <h3 className="font-black uppercase tracking-widest text-sm">Vincular Rotas</h3>
+                            <p className="text-blue-200 text-[10px] font-bold tracking-tight">Novos registros pendentes</p>
                         </div>
                     </div>
                 </div>
                 
-                <div className="p-10">
-                    <div className="flex items-center gap-5 p-6 bg-slate-950 border border-blue-500/20 rounded-[2rem] mb-8 text-blue-400">
-                        <AlertTriangle size={32} className="shrink-0 animate-pulse" />
-                        <p className="text-xs font-black leading-relaxed uppercase tracking-widest">
-                            Atenção: Rotas sem operação não podem ser processadas. Vincule agora para automatizar importações futuras.
-                        </p>
+                <div className="p-8 flex-1 overflow-y-auto space-y-4 scrollbar-thin">
+                    <div className="flex items-center gap-4 p-4 bg-slate-950 border border-blue-500/20 rounded-2xl text-blue-400">
+                        <AlertTriangle size={24} className="shrink-0" />
+                        <p className="text-[10px] font-black uppercase tracking-widest">Rotas sem operação cadastradas. Vincule agora.</p>
                     </div>
 
-                    <div className="max-h-[340px] overflow-y-auto space-y-4 mb-10 pr-4 scrollbar-thin">
-                        {pendingItems.map((item, idx) => (
-                            <div key={idx} className="flex items-center gap-6 p-6 bg-slate-950 border border-slate-800 rounded-[2.5rem] hover:border-blue-500/50 transition-all group">
-                                <div className="flex-1">
-                                    <span className="text-[9px] text-slate-500 font-black uppercase tracking-[0.2em] block mb-2">Rota Identificada</span>
-                                    <div className="font-black text-white text-xl tracking-tighter truncate group-hover:text-blue-400 transition-colors">{item.rota}</div>
-                                </div>
-                                <div className="w-[55%] relative">
-                                    <span className="text-[9px] text-slate-500 font-black uppercase tracking-[0.2em] block mb-2">Vincular Operação</span>
-                                    <select 
-                                        value={item.operacao} 
-                                        onChange={(e) => {
-                                            const newPending = [...pendingItems];
-                                            newPending[idx].operacao = e.target.value;
-                                            setPendingItems(newPending);
-                                        }}
-                                        className="w-full p-4 bg-slate-900 border-2 border-slate-800 rounded-2xl text-xs font-black text-white outline-none focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer"
-                                    >
-                                        <option value="">Selecione...</option>
-                                        {userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}
-                                    </select>
-                                    <div className="absolute right-4 bottom-4 pointer-events-none text-slate-600"><ChevronDown size={18}/></div>
-                                </div>
+                    {pendingItems.map((item, idx) => (
+                        <div key={idx} className="flex items-center gap-4 p-5 bg-slate-950 border border-slate-800 rounded-3xl group hover:border-blue-500/30 transition-all">
+                            <div className="flex-1">
+                                <span className="text-[9px] text-slate-500 font-black uppercase tracking-widest block mb-1">Rota</span>
+                                <div className="font-black text-white text-lg tracking-tighter truncate group-hover:text-blue-400">{item.rota}</div>
                             </div>
-                        ))}
-                    </div>
+                            <div className="w-[50%] relative">
+                                <select 
+                                    value={item.operacao} 
+                                    onChange={(e) => {
+                                        const newPending = [...pendingItems];
+                                        newPending[idx].operacao = e.target.value;
+                                        setPendingItems(newPending);
+                                    }}
+                                    className="w-full p-3 bg-slate-900 border-2 border-slate-800 rounded-xl text-[11px] font-black text-white outline-none focus:border-blue-500 appearance-none cursor-pointer"
+                                >
+                                    <option value="">Selecione...</option>
+                                    {userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                    ))}
+                </div>
 
+                <div className="p-8 bg-slate-900 border-t border-slate-800 shrink-0">
                     <button 
                         onClick={handleLinkPending} 
                         disabled={isProcessingImport || pendingItems.some(p => !p.operacao)} 
-                        className="w-full py-6 bg-blue-600 text-white font-black uppercase tracking-[0.3em] text-sm rounded-[2rem] shadow-[0_20px_40px_rgba(37,99,235,0.2)] flex items-center justify-center gap-4 transition-all hover:bg-blue-700 active:scale-95 disabled:opacity-50 border-b-8 border-blue-900"
+                        className="w-full py-5 bg-blue-600 text-white font-black uppercase tracking-[0.3em] text-xs rounded-2xl shadow-2xl transition-all hover:bg-blue-700 active:scale-95 disabled:opacity-50 border-b-4 border-blue-800"
                     >
-                        {isProcessingImport ? <Loader2 size={24} className="animate-spin" /> : <><CheckCircle2 size={24} /> Concluir e Salvar Tudo</>}
+                        {isProcessingImport ? <Loader2 size={24} className="animate-spin" /> : "Gravar Vínculos"}
                     </button>
-                    
-                    <p className="text-center mt-6 text-[9px] text-slate-600 font-black uppercase tracking-[0.4em]">Design CCO Digital V3.0</p>
                 </div>
             </div>
         </div>
       )}
 
-      {/* MODAL IMPORTAÇÃO */}
+      {/* IMPORT MODAL */}
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-             <div className="bg-slate-900 border border-slate-800 rounded-[3rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-200">
+             <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-200">
                 <div className="bg-emerald-600 p-8 flex justify-between items-center text-white">
                     <div className="flex items-center gap-4">
                         <Upload size={24} className="bg-white/20 p-2 rounded-xl" />
@@ -616,14 +711,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                         placeholder="Cole aqui os dados da sua planilha Excel..."
                     />
                     <button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="w-full py-5 bg-emerald-600 text-white font-black uppercase tracking-widest text-xs rounded-[2rem] shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-emerald-700 disabled:opacity-50 border-b-8 border-emerald-900">
-                        {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><Sparkles size={20} /> Processar Inteligente</>}
+                        {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} />}
                     </button>
                 </div>
              </div>
         </div>
       )}
 
-      {/* MODAL NOVA ROTA */}
+      {/* MANUAL ENTRY MODAL */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-[3rem] shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in">
