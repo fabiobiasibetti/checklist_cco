@@ -1,12 +1,17 @@
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord } from '../types';
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture } from '../types';
 
 const SITE_PATH = "vialacteoscombr.sharepoint.com:/sites/CCO";
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, { mapping: Record<string, string>, readOnly: Set<string>, internalNames: Set<string> }> = {};
 
 async function graphFetch(endpoint: string, token: string, options: RequestInit = {}) {
-  const url = endpoint.startsWith('https://') ? endpoint : `https://graph.microsoft.com/v1.0${endpoint}`;
+  // Adiciona timestamp para evitar cache do navegador em requisições GET
+  const separator = endpoint.includes('?') ? '&' : '?';
+  const url = endpoint.startsWith('https://') 
+    ? endpoint 
+    : `https://graph.microsoft.com/v1.0${endpoint}${options.method === 'GET' || !options.method ? `${separator}t=${Date.now()}` : ''}`;
+    
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -17,11 +22,11 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
 
   if (!res.ok) {
     let errDetail = "";
-    try { const err = await res.json(); errDetail = err.error?.message || JSON.stringify(err); } 
-    catch(e) { errDetail = await res.text(); }
-    
-    if (res.status === 400 && (errDetail.includes("unique constraints") || errDetail.includes("already has the provided value"))) {
-        return { _isDuplicate: true, detail: errDetail };
+    try { 
+        const err = await res.json(); 
+        errDetail = err.error?.message || JSON.stringify(err); 
+    } catch(e) { 
+        errDetail = await res.text(); 
     }
     throw new Error(errDetail);
   }
@@ -45,7 +50,7 @@ async function findListByIdOrName(siteId: string, listName: string, token: strin
     );
     if (found) return found;
   }
-  throw new Error(`Lista '${listName}' não encontrada.`);
+  throw new Error(`Lista '${listName}' não encontrada no SharePoint.`);
 }
 
 function normalizeString(str: string): string {
@@ -60,22 +65,29 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
   const mapping: Record<string, string> = {};
   const readOnly = new Set<string>();
   const internalNames = new Set<string>();
+  
   columns.value.forEach((col: any) => {
     const internalName = col.name;
     mapping[normalizeString(col.name)] = internalName;
     mapping[normalizeString(col.displayName)] = internalName;
     internalNames.add(internalName);
-    if (col.readOnly || internalName.startsWith('_') || ['ID', 'Author', 'Created'].includes(internalName)) readOnly.add(internalName);
+    if (col.readOnly || internalName.startsWith('_') || ['ID', 'Author', 'Created'].includes(internalName)) {
+        if (internalName !== 'Title') readOnly.add(internalName);
+    }
   });
+  
   columnMappingCache[cacheKey] = { mapping, readOnly, internalNames };
   return columnMappingCache[cacheKey];
 }
 
 function resolveFieldName(mapping: Record<string, string>, target: string): string {
-  return mapping[normalizeString(target)] || target;
+  const normalized = normalizeString(target);
+  if (normalized === 'titulo' || normalized === 'rota') return 'Title';
+  return mapping[normalized] || target;
 }
 
 export const SharePointService = {
+  // ... (Outros métodos getTasks, getOperations, etc permanecem iguais)
   async getTasks(token: string): Promise<SPTask[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -99,13 +111,8 @@ export const SharePointService = {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'Operacoes_Checklist', token);
         const { mapping } = await getListColumnMapping(siteId, list.id, token);
-        
-        // Garantindo o nome interno correto: Responsavel
         const emailField = mapping['responsavel'] || 'Responsavel';
-        
-        // Buscamos todos os itens para garantir que o filtro local funcione mesmo com e-mails sensíveis a maiúsculas/espaços
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-        
         const filtered = (data.value || [])
           .map((item: any) => ({
             id: String(item.fields.id || item.id),
@@ -115,12 +122,8 @@ export const SharePointService = {
           }))
           .filter((op: SPOperation) => op.Email.toLowerCase() === userEmail.toLowerCase().trim())
           .sort((a: SPOperation, b: SPOperation) => a.Ordem - b.Ordem);
-          
         return filtered;
-    } catch (e) { 
-        console.error("Erro ao buscar operações:", e);
-        return []; 
-    }
+    } catch (e) { return []; }
   },
 
   async getTeamMembers(token: string): Promise<string[]> {
@@ -208,7 +211,6 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
     const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
-    
     const celulaInternalName = mapping['celula'] || 'celula';
     const raw = { Title: record.resetBy || 'Reset', Data: new Date(record.timestamp).toISOString(), DadosJSON: JSON.stringify(record.tasks) };
     const fields: any = {};
@@ -223,7 +225,6 @@ export const SharePointService = {
       const list = await findListByIdOrName(siteId, 'Historico_checklist_web', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
       const celulaField = mapping['celula'] || 'celula';
-      
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
       return (data.value || [])
         .map((item: any) => ({
@@ -238,8 +239,99 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
+  async getDepartures(token: string): Promise<RouteDeparture[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
+      const { mapping } = await getListColumnMapping(siteId, list.id, token);
+      
+      // Busca itens com expand=fields para pegar os dados reais das colunas
+      const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
+      
+      return (data.value || []).map((item: any) => {
+        const f = item.fields;
+        return {
+          id: String(item.id),
+          semana: f[resolveFieldName(mapping, 'Semana')] || "",
+          rota: f.Title || "",
+          data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "",
+          inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00",
+          motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
+          placa: f[resolveFieldName(mapping, 'Placa')] || "",
+          saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00",
+          motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "",
+          observacao: f[resolveFieldName(mapping, 'Observacao')] || "",
+          statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK",
+          aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO",
+          operacao: f[resolveFieldName(mapping, 'Operacao')] || "",
+          statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK",
+          tempo: f[resolveFieldName(mapping, 'TempoGap')] || "OK",
+          createdAt: f.Created || new Date().toISOString()
+        };
+      });
+    } catch (e) {
+      console.error("Erro ao carregar saídas do SharePoint:", e);
+      return [];
+    }
+  },
+
+  async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
+    const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
+    
+    const raw: any = {
+      Title: departure.rota,
+      Semana: departure.semana,
+      DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null,
+      HorarioInicio: departure.inicio,
+      Motorista: departure.motorista,
+      Placa: departure.placa,
+      HorarioSaida: departure.saida,
+      MotivoAtraso: departure.motivo,
+      Observacao: departure.observacao,
+      StatusGeral: departure.statusGeral,
+      Aviso: departure.aviso,
+      Operacao: departure.operacao,
+      StatusOp: departure.statusOp,
+      TempoGap: departure.tempo
+    };
+
+    const fields: any = {};
+    Object.keys(raw).forEach(k => {
+      const int = resolveFieldName(mapping, k);
+      if (int === 'Title' || (internalNames.has(int) && !readOnly.has(int))) {
+          fields[int] = raw[k];
+      }
+    });
+
+    // Melhora na verificação se é atualização:
+    // Se temos um ID populado e não é um valor temporário/0
+    const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
+
+    if (isUpdate) {
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${departure.id}/fields`, token, { 
+          method: 'PATCH', 
+          body: JSON.stringify(fields) 
+      });
+      return departure.id;
+    } else {
+      const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { 
+          method: 'POST', 
+          body: JSON.stringify({ fields }) 
+      });
+      return String(res.id);
+    }
+  },
+
+  async deleteDeparture(token: string, id: string): Promise<void> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
+    await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}`, token, { method: 'DELETE' });
+  },
+
   async getAllListsMetadata(token: string) {
-    const listNames = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco'];
+    const listNames = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco', 'Dados_Saida_de_rotas'];
     return Promise.all(listNames.map(async name => {
       try {
         const siteId = await getResolvedSiteId(token);

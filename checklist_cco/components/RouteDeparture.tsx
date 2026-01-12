@@ -1,41 +1,89 @@
 
 import React, { useState, useEffect } from 'react';
 import { RouteDeparture } from '../types';
-import { getDepartures, saveDepartures } from '../services/storageService';
+import { SharePointService } from '../services/sharepointService';
 import { parseRouteDepartures } from '../services/geminiService';
-import { Plus, Trash2, Download, Save, AlertTriangle, CheckCircle2, Clock, Maximize2, Minimize2, X, FileText, User, Calendar, MapPin, Upload, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Download, Save, Clock, Maximize2, Minimize2, X, Upload, Sparkles, Loader2, RefreshCw } from 'lucide-react';
 
 const RouteDepartureView: React.FC = () => {
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isProcessingImport, setIsProcessingImport] = useState(false);
   const [importText, setImportText] = useState('');
   
+  const getAccessToken = () => (window as any).__access_token;
+
   // Form State
   const [formData, setFormData] = useState<Partial<RouteDeparture>>({
     rota: '',
     data: new Date().toISOString().split('T')[0],
     inicio: '00:00:00',
+    saida: '00:00:00',
     motorista: '',
     placa: '',
     operacao: '',
-    statusOp: 'OK',
-    tempo: 'OK',
+    motivo: '',
     observacao: '',
+    statusGeral: 'OK',
+    aviso: 'NÃO',
   });
 
+  const loadData = async () => {
+    const token = getAccessToken();
+    if (!token) return;
+    setIsLoading(true);
+    try {
+      // Força busca limpa do SharePoint
+      const spData = await SharePointService.getDepartures(token);
+      setRoutes(spData);
+    } catch (e) {
+      console.error("Falha ao carregar rotas:", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loaded = getDepartures();
-    setRoutes(loaded);
-    setIsLoading(false);
+    loadData();
   }, []);
 
-  const handleSave = (updated: RouteDeparture[]) => {
-    setRoutes(updated);
-    saveDepartures(updated);
+  const timeToSeconds = (timeStr: string): number => {
+    if (!timeStr || !timeStr.includes(':')) return 0;
+    const parts = timeStr.split(':').map(Number);
+    const h = parts[0] || 0;
+    const m = parts[1] || 0;
+    const s = parts[2] || 0;
+    return (h * 3600) + (m * 60) + s;
+  };
+
+  const secondsToTime = (totalSeconds: number): string => {
+    const isNegative = totalSeconds < 0;
+    const absSeconds = Math.abs(totalSeconds);
+    const h = Math.floor(absSeconds / 3600);
+    const m = Math.floor((absSeconds % 3600) / 60);
+    const s = absSeconds % 60;
+    const formatted = [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+    return isNegative ? `-${formatted}` : formatted;
+  };
+
+  const calculateGap = (inicio: string, saida: string): { gap: string, status: string } => {
+    if (!inicio || !saida || inicio === '00:00:00' || saida === '00:00:00') return { gap: 'OK', status: 'OK' };
+    
+    const startSec = timeToSeconds(inicio);
+    const endSec = timeToSeconds(saida);
+    const diff = endSec - startSec;
+    
+    if (diff === 0) return { gap: 'OK', status: 'OK' };
+    
+    const gapFormatted = secondsToTime(diff);
+    // Só é "Atrasado" se o gap for maior que zero segundos
+    const status = diff > 0 ? 'Atrasado' : 'OK';
+    
+    return { gap: gapFormatted, status };
   };
 
   const calculateWeekString = (dateStr: string) => {
@@ -43,95 +91,148 @@ const RouteDepartureView: React.FC = () => {
     const date = new Date(dateStr + 'T12:00:00');
     const monthNames = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
     const month = monthNames[date.getMonth()];
-    
     const day = date.getDate();
     const firstDayOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-    const firstDayWeekday = firstDayOfMonth.getDay(); // 0=Sun, 1=Mon...
-    
-    // Adjust so Monday is the start of the week logic (Monday=0, Sunday=6)
+    const firstDayWeekday = firstDayOfMonth.getDay();
     const adjustedFirstDayWeekday = firstDayWeekday === 0 ? 6 : firstDayWeekday - 1;
-    
     const weekNum = Math.ceil((day + adjustedFirstDayWeekday) / 7);
     return `${month} S${weekNum}`;
   };
 
   const openModal = () => {
     setFormData({
-      ...formData,
-      id: undefined,
-      data: new Date().toISOString().split('T')[0],
       rota: '',
+      data: new Date().toISOString().split('T')[0],
+      inicio: '00:00:00',
+      saida: '00:00:00',
       motorista: '',
       placa: '',
       operacao: '',
-      statusOp: 'OK',
-      tempo: 'OK',
+      motivo: '',
       observacao: '',
+      statusGeral: 'OK',
+      aviso: 'NÃO',
     });
     setIsModalOpen(true);
   };
 
-  const closeModal = () => {
-    setIsModalOpen(false);
-  };
+  const closeModal = () => setIsModalOpen(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const week = calculateWeekString(formData.data || '');
-    
-    const newRoute: RouteDeparture = {
-      ...formData as RouteDeparture,
-      id: Date.now().toString(),
-      semana: week,
-      saida: '00:00:00',
-      motivo: '',
-      statusGeral: 'OK',
-      aviso: 'NÃO',
-      createdAt: new Date().toISOString()
-    };
-    handleSave([...routes, newRoute]);
-    closeModal();
+    const token = getAccessToken();
+    if (!token) return;
+
+    setIsSyncing(true);
+    try {
+        const week = calculateWeekString(formData.data || '');
+        const { gap, status } = calculateGap(formData.inicio || '00:00:00', formData.saida || '00:00:00');
+        
+        const newRoute: RouteDeparture = {
+            ...formData as RouteDeparture,
+            id: '', // Novo item
+            semana: week,
+            tempo: gap,
+            statusOp: status,
+            createdAt: new Date().toISOString()
+        };
+
+        const newId = await SharePointService.updateDeparture(token, newRoute);
+        // Atualiza estado local com o ID real do SharePoint para permitir edições futuras
+        setRoutes(prev => [...prev, { ...newRoute, id: newId }]);
+        closeModal();
+    } catch (err: any) {
+        console.error("Erro ao salvar no SharePoint:", err);
+        alert(`FALHA NA CONEXÃO: ${err.message}`);
+    } finally {
+        setIsSyncing(false);
+    }
   };
 
   const handleImport = async () => {
-    if (!importText.trim()) return;
+    const token = getAccessToken();
+    if (!importText.trim() || !token) return;
     setIsProcessingImport(true);
     try {
         const parsed = await parseRouteDepartures(importText);
-        const newRoutes: RouteDeparture[] = parsed.map(p => ({
-            ...p,
-            id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-            semana: p.semana || calculateWeekString(p.data || ''),
-            saida: p.saida || '00:00:00',
-            motivo: p.motivo || '',
-            statusGeral: p.statusGeral || 'OK',
-            aviso: p.aviso || 'NÃO',
-            statusOp: p.statusOp || 'OK',
-            tempo: p.tempo || 'OK',
-            createdAt: new Date().toISOString()
-        } as RouteDeparture));
+        const importPromises = parsed.map(p => {
+            const { gap, status } = calculateGap(p.inicio || '00:00:00', p.saida || '00:00:00');
+            const r: RouteDeparture = {
+                ...p,
+                id: '',
+                semana: p.semana || calculateWeekString(p.data || ''),
+                saida: p.saida || '00:00:00',
+                motivo: p.motivo || '',
+                statusGeral: p.statusGeral || 'OK',
+                aviso: p.aviso || 'NÃO',
+                statusOp: status,
+                tempo: gap,
+                createdAt: new Date().toISOString()
+            } as RouteDeparture;
+            return SharePointService.updateDeparture(token, r);
+        });
 
-        handleSave([...routes, ...newRoutes]);
+        await Promise.all(importPromises);
+        await loadData(); // Recarrega tudo do SharePoint para garantir sincronia
         setIsImportModalOpen(false);
         setImportText('');
-        alert(`${newRoutes.length} rotas importadas com sucesso!`);
-    } catch (error) {
+        alert(`Importação concluída e salva no SharePoint!`);
+    } catch (error: any) {
         console.error(error);
-        alert("Erro ao processar os dados. Certifique-se de copiar as linhas corretamente.");
+        alert(`Erro ao processar importação: ${error.message}`);
     } finally {
         setIsProcessingImport(false);
     }
   };
 
-  const removeRow = (id: string) => {
-    if (confirm('Deseja excluir esta rota?')) {
-      handleSave(routes.filter(r => r.id !== id));
+  const removeRow = async (id: string) => {
+    const token = getAccessToken();
+    if (!token) return;
+    if (confirm('Deseja excluir permanentemente do SharePoint?')) {
+      setIsSyncing(true);
+      try {
+        await SharePointService.deleteDeparture(token, id);
+        setRoutes(routes.filter(r => r.id !== id));
+      } catch (err: any) {
+          alert(`Erro ao excluir: ${err.message}`);
+      } finally {
+          setIsSyncing(false);
+      }
     }
   };
 
-  const updateCell = (id: string, field: keyof RouteDeparture, value: string) => {
-    const updated = routes.map(r => r.id === id ? { ...r, [field]: value } : r);
-    handleSave(updated);
+  const updateCell = async (id: string, field: keyof RouteDeparture, value: string) => {
+    const token = getAccessToken();
+    if (!token) return;
+
+    const route = routes.find(r => r.id === id);
+    if (!route) return;
+
+    let updatedRoute = { ...route, [field]: value };
+    
+    // Recalcula Gap se horário mudar
+    if (field === 'inicio' || field === 'saida') {
+        const { gap, status } = calculateGap(updatedRoute.inicio, updatedRoute.saida);
+        updatedRoute.tempo = gap;
+        updatedRoute.statusOp = status;
+    }
+
+    if (field === 'data') {
+        updatedRoute.semana = calculateWeekString(value);
+    }
+
+    // Atualiza UI primeiro para resposta instantânea
+    setRoutes(prev => prev.map(r => r.id === id ? updatedRoute : r));
+
+    setIsSyncing(true);
+    try {
+      await SharePointService.updateDeparture(token, updatedRoute);
+    } catch (err: any) {
+      console.error("Erro na sincronização SharePoint:", err.message);
+      // Opcional: Reverter UI em caso de falha crítica
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const getRowStyle = (route: RouteDeparture) => {
@@ -147,7 +248,15 @@ const RouteDepartureView: React.FC = () => {
     return 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
   };
 
-  if (isLoading) return <div className="p-8 text-center text-blue-600">Carregando...</div>;
+  if (isLoading) return (
+    <div className="h-full flex flex-col items-center justify-center text-blue-600 gap-4">
+        <Loader2 size={40} className="animate-spin" />
+        <p className="font-bold animate-pulse text-xs uppercase tracking-widest text-center">
+            CONECTANDO AO SHAREPOINT...<br/>
+            <span className="text-[10px] font-normal">Sincronizando Banco de Saídas</span>
+        </p>
+    </div>
+  );
 
   return (
     <div className={`flex flex-col h-full animate-fade-in ${isFullscreen ? 'fixed inset-0 z-[60] bg-white dark:bg-slate-950 p-4' : ''}`}>
@@ -156,25 +265,26 @@ const RouteDepartureView: React.FC = () => {
           <h2 className="text-xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
             <Clock className="text-blue-600" />
             Saída de Rotas
-            {isFullscreen && <span className="ml-2 px-2 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-[10px] rounded uppercase tracking-widest">Tela Cheia</span>}
+            {isSyncing && <Loader2 size={16} className="animate-spin text-blue-500 ml-2"/>}
           </h2>
-          <p className="text-xs text-gray-500 dark:text-gray-400">Controle de horários e motivos de atraso</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 font-bold uppercase tracking-tighter">Sincronizado com Dados_Saida_de_rotas</p>
         </div>
         <div className="flex gap-2">
+          <button onClick={loadData} className="p-2 text-slate-400 hover:text-blue-500 transition-colors" title="Forçar Atualização">
+              <RefreshCw size={18} />
+          </button>
           <button 
             onClick={() => setIsImportModalOpen(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-all border border-emerald-100 dark:border-emerald-800 shadow-sm"
+            className="flex items-center gap-2 px-3 py-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-emerald-100 border border-emerald-100 dark:border-emerald-800 shadow-sm"
           >
             <Upload size={18} />
             <span className="text-xs font-bold hidden sm:inline">Importar Excel</span>
           </button>
           <button 
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all border shadow-sm ${isFullscreen ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-700 hover:bg-gray-200 dark:hover:bg-slate-700'}`}
-            title={isFullscreen ? "Sair da Tela Cheia" : "Tela Cheia / Ajustar à Tela"}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all border shadow-sm ${isFullscreen ? 'bg-blue-600 text-white border-blue-500' : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-slate-700'}`}
           >
             {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-            <span className="text-xs font-bold hidden sm:inline">{isFullscreen ? 'Sair' : 'Ajustar'}</span>
           </button>
           <button 
             onClick={openModal}
@@ -186,63 +296,58 @@ const RouteDepartureView: React.FC = () => {
         </div>
       </div>
 
-      <div className={`flex-1 overflow-auto bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm ${isFullscreen ? 'max-h-full overflow-x-hidden' : ''}`}>
-        <table className={`w-full border-collapse text-[10px] ${isFullscreen ? 'min-w-full table-fixed' : 'min-w-[1400px]'}`}>
-          <thead className="sticky top-0 z-20 bg-blue-900 text-white uppercase font-bold tracking-wider text-center">
+      <div className="flex-1 overflow-auto bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm relative scrollbar-thin">
+        <table className={`w-full border-collapse text-[10px] ${isFullscreen ? 'min-w-full' : 'min-w-[1500px]'}`}>
+          <thead className="sticky top-0 z-20 bg-blue-900 dark:bg-blue-950 text-white uppercase font-black tracking-widest text-center shadow-lg">
             <tr>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[6%]' : 'w-20'}`}>Semana</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[7%]' : 'w-24'}`}>Rota</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[9%]' : 'w-28'}`}>Data</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[7%]' : 'w-24'}`}>Início</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[15%]' : ''}`}>Motorista</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[7%]' : 'w-24'}`}>Placa</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[7%]' : 'w-24'}`}>Saída</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[8%]' : 'w-32'}`}>Motivo</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[15%]' : 'min-w-[200px]'}`}>Obs</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[4%]' : 'w-16'}`}>Geral</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[4%]' : 'w-16'}`}>Av</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[12%]' : 'w-40'}`}>Operação</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[7%]' : 'w-24'}`}>Status Op</th>
-              <th className={`p-2 border border-blue-800 ${isFullscreen ? 'w-[7%]' : 'w-24'}`}>Tempo</th>
-              <th className={`p-2 border border-blue-800 w-10 sticky right-0 bg-blue-900`}>#</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-20">Semana</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-24">Rota</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-28">Data</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-24">Início</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 min-w-[150px]">Motorista</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-24">Placa</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-24">Saída</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-32">Motivo</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 min-w-[200px]">Obs</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-16">Geral</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-16">Av</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-40">Operação</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-24">Status Op</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-24">Tempo</th>
+              <th className="p-2 border border-blue-800 dark:border-blue-900 w-10 sticky right-0 bg-blue-900 dark:bg-blue-950">#</th>
             </tr>
           </thead>
           <tbody>
             {routes.length === 0 && (
               <tr>
-                <td colSpan={15} className="p-10 text-center text-gray-400">
-                  Nenhuma rota registrada. Clique em "Nova Rota" ou "Importar" para começar.
+                <td colSpan={15} className="p-12 text-center text-slate-400 font-bold uppercase italic text-xs tracking-widest">
+                   Nenhum dado encontrado no SharePoint.
                 </td>
               </tr>
             )}
             {routes.map((route) => (
-              <tr 
-                key={route.id} 
-                className={`hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition-colors border-b ${getRowStyle(route)}`}
-              >
+              <tr key={route.id} className={`hover:bg-blue-50/50 dark:hover:bg-blue-900/10 border-b ${getRowStyle(route)}`}>
+                <td className="p-0 border border-gray-200 dark:border-slate-800 text-center font-bold bg-slate-50 dark:bg-slate-800/50">{route.semana}</td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.semana} onChange={(e) => updateCell(route.id, 'semana', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center uppercase" />
-                </td>
-                <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none font-bold text-center" />
+                  <input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none font-black text-center text-blue-600 dark:text-blue-400" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
                   <input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.inicio} onChange={(e) => updateCell(route.id, 'inicio', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center font-mono" />
+                  <input type="text" value={route.inicio} onChange={(e) => updateCell(route.id, 'inicio', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center font-mono" placeholder="00:00:00" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none uppercase truncate" />
+                  <input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none uppercase truncate font-medium" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
                   <input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center font-bold uppercase" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.saida} onChange={(e) => updateCell(route.id, 'saida', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center font-mono" />
+                  <input type="text" value={route.saida} onChange={(e) => updateCell(route.id, 'saida', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center font-mono" placeholder="00:00:00" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full h-full p-1 bg-transparent outline-none cursor-pointer">
+                  <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full h-full p-1 bg-transparent outline-none cursor-pointer text-center">
                     <option value="">Nenhum</option>
                     <option value="Manutenção">Manutenção</option>
                     <option value="Mão de obra">Mão de obra</option>
@@ -252,34 +357,34 @@ const RouteDepartureView: React.FC = () => {
                   </select>
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.observacao} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none truncate" />
+                  <input type="text" value={route.observacao} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800 text-center">
-                   <select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full p-1 bg-transparent outline-none text-center font-bold">
+                   <select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full p-1 bg-transparent outline-none text-center font-black">
                     <option value="OK">OK</option>
                     <option value="NOK">NOK</option>
                   </select>
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800 text-center">
-                  <select value={route.aviso} onChange={(e) => updateCell(route.id, 'aviso', e.target.value)} className="w-full h-full p-1 bg-transparent outline-none text-center font-bold">
+                  <select value={route.aviso} onChange={(e) => updateCell(route.id, 'aviso', e.target.value)} className="w-full h-full p-1 bg-transparent outline-none text-center font-black">
                     <option value="SIM">SIM</option>
                     <option value="NÃO">NÃO</option>
                   </select>
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800">
-                  <input type="text" value={route.operacao} onChange={(e) => updateCell(route.id, 'operacao', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none uppercase font-bold truncate" />
+                  <input type="text" value={route.operacao} onChange={(e) => updateCell(route.id, 'operacao', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none uppercase font-black tracking-tight" />
                 </td>
                 <td className="p-0 border border-gray-200 dark:border-slate-800 text-center">
-                  <select value={route.statusOp} onChange={(e) => updateCell(route.id, 'statusOp', e.target.value)} className={`w-full h-full p-1 bg-transparent outline-none text-center font-bold ${getStatusBadgeStyle(route.statusOp)}`}>
+                  <select value={route.statusOp} onChange={(e) => updateCell(route.id, 'statusOp', e.target.value)} className={`w-full h-full p-1 bg-transparent outline-none text-center font-black ${getStatusBadgeStyle(route.statusOp)}`}>
                     <option value="OK">OK</option>
                     <option value="Atrasado">Atrasado</option>
                   </select>
                 </td>
-                <td className="p-0 border border-gray-200 dark:border-slate-800">
-                   <input type="text" value={route.tempo} onChange={(e) => updateCell(route.id, 'tempo', e.target.value)} className="w-full h-full p-1.5 bg-transparent outline-none text-center font-mono" />
+                <td className="p-0 border border-gray-200 dark:border-slate-800 text-center font-mono font-black bg-slate-100 dark:bg-slate-800/50">
+                   {route.tempo}
                 </td>
                 <td className="p-1 border border-gray-200 dark:border-slate-800 sticky right-0 bg-white dark:bg-slate-900 text-center">
-                  <button onClick={() => removeRow(route.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1">
+                  <button onClick={() => removeRow(route.id)} className="text-gray-300 hover:text-red-500 transition-colors p-1" title="Excluir Permanentemente">
                     <Trash2 size={14} />
                   </button>
                 </td>
@@ -289,60 +394,23 @@ const RouteDepartureView: React.FC = () => {
         </table>
       </div>
 
-      {/* IMPORT MODAL */}
+      {/* MODALS (Import e Nova Rota permanecem com a lógica refinada de ID) */}
       {isImportModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
              <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden border dark:border-slate-700">
                 <div className="bg-emerald-800 dark:bg-slate-800 text-white p-4 flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                        <div className="p-2 bg-emerald-600 rounded-lg">
-                            <Upload size={20} />
-                        </div>
-                        <div>
-                            <h3 className="font-bold text-lg">Importar do Excel</h3>
-                            <p className="text-[10px] text-emerald-200">Cole as linhas da planilha abaixo para processar com IA</p>
-                        </div>
+                        <Upload size={20} />
+                        <h3 className="font-bold">Sincronizar Planilha para SharePoint</h3>
                     </div>
-                    <button onClick={() => setIsImportModalOpen(false)} className="hover:bg-white/10 p-1 rounded-full transition-colors">
-                        <X size={24} />
-                    </button>
+                    <button onClick={() => setIsImportModalOpen(false)}><X size={24} /></button>
                 </div>
-                
-                <div className="p-6 bg-gray-50 dark:bg-slate-900">
-                    <div className="mb-4">
-                        <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2">Cole os dados aqui:</label>
-                        <textarea 
-                            value={importText}
-                            onChange={(e) => setImportText(e.target.value)}
-                            className="w-full h-64 p-4 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-xs font-mono dark:text-white focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
-                            placeholder="Selecione as linhas no Excel, copie (Ctrl+C) e cole aqui (Ctrl+V)..."
-                        />
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-3">
-                        <button 
-                            onClick={() => setIsImportModalOpen(false)}
-                            className="flex-1 py-3 bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-gray-200 font-bold rounded-xl hover:bg-gray-300 dark:hover:bg-slate-600 transition-colors"
-                        >
-                            Cancelar
-                        </button>
-                        <button 
-                            onClick={handleImport}
-                            disabled={!importText.trim() || isProcessingImport}
-                            className="flex-2 py-3 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-all shadow-lg flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                            style={{ flex: 2 }}
-                        >
-                            {isProcessingImport ? (
-                                <>
-                                    <Loader2 size={20} className="animate-spin" />
-                                    Processando com IA...
-                                </>
-                            ) : (
-                                <>
-                                    <Sparkles size={20} />
-                                    Processar e Importar
-                                </>
-                            )}
+                <div className="p-6">
+                    <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-4 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-xs font-mono dark:text-white mb-4" placeholder="Cole as linhas do Excel aqui..."/>
+                    <div className="flex gap-3">
+                        <button onClick={() => setIsImportModalOpen(false)} className="flex-1 py-3 bg-gray-200 dark:bg-slate-700 font-bold rounded-xl">Cancelar</button>
+                        <button onClick={handleImport} disabled={isProcessingImport} className="flex-[2] py-3 bg-emerald-600 text-white font-bold rounded-xl flex items-center justify-center gap-2">
+                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><Sparkles size={20} /> Processar e Gravar Cloud</>}
                         </button>
                     </div>
                 </div>
@@ -350,109 +418,51 @@ const RouteDepartureView: React.FC = () => {
         </div>
       )}
 
-      {/* ADD ROUTE MODAL */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border dark:border-slate-700">
-            <div className="bg-blue-900 dark:bg-slate-800 text-white p-4 flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-blue-600 rounded-lg">
-                        <Plus size={20} />
-                    </div>
-                    <div>
-                        <h3 className="font-bold text-lg">Nova Operação</h3>
-                        <p className="text-[10px] text-blue-200">Insira os dados da rota abaixo</p>
-                    </div>
-                </div>
-                <button onClick={closeModal} className="hover:bg-white/10 p-1 rounded-full transition-colors">
-                    <X size={24} />
-                </button>
+            <div className="bg-blue-600 dark:bg-slate-800 text-white p-4 flex justify-between items-center">
+                <h3 className="font-black uppercase tracking-widest text-sm flex items-center gap-2"><Plus size={20} /> Registrar Saída no SharePoint</h3>
+                <button onClick={closeModal}><X size={24} /></button>
             </div>
-            
-            <form onSubmit={handleSubmit} className="p-6 bg-gray-50 dark:bg-slate-900">
-                <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Data</label>
-                            <input 
-                                type="date" required
-                                value={formData.data} onChange={e => setFormData({...formData, data: e.target.value})}
-                                className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Rota</label>
-                            <input 
-                                type="text" required
-                                value={formData.rota} onChange={e => setFormData({...formData, rota: e.target.value.toUpperCase()})}
-                                className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-bold dark:text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: 24133D"
-                            />
-                        </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 bg-gray-50 dark:bg-slate-900">
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Data Operação</label>
+                        <input type="date" required value={formData.data} onChange={e => setFormData({...formData, data: e.target.value})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-bold shadow-sm"/>
                     </div>
-
-                    <div>
-                        <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Operação (Cliente)</label>
-                        <input 
-                            type="text" required
-                            value={formData.operacao} onChange={e => setFormData({...formData, operacao: e.target.value.toUpperCase()})}
-                            className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-bold dark:text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="NOME DO CLIENTE"
-                        />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Motorista</label>
-                            <input 
-                                type="text" required
-                                value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value.toUpperCase()})}
-                                className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm dark:text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="NOME"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Placa</label>
-                            <input 
-                                type="text" required
-                                value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value.toUpperCase()})}
-                                className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-bold dark:text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="ABC1D23"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">H. Início (Previsto)</label>
-                            <input 
-                                type="text" required
-                                value={formData.inicio} onChange={e => setFormData({...formData, inicio: e.target.value})}
-                                className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-mono dark:text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="00:00:00"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Tempo / Gap</label>
-                            <input 
-                                type="text"
-                                value={formData.tempo} onChange={e => setFormData({...formData, tempo: e.target.value.toUpperCase()})}
-                                className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-mono dark:text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Ex: OK ou 00:30"
-                            />
-                        </div>
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Rota</label>
+                        <input type="text" required placeholder="Número da Rota" value={formData.rota} onChange={e => setFormData({...formData, rota: e.target.value.toUpperCase()})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-black text-blue-600 dark:text-blue-400 shadow-sm"/>
                     </div>
                 </div>
-
-                <div className="flex gap-4 mt-8 pt-6 border-t dark:border-slate-800">
-                    <button 
-                        type="button" onClick={closeModal}
-                        className="flex-1 py-3 bg-gray-200 dark:bg-slate-700 text-gray-700 dark:text-gray-200 font-bold rounded-xl hover:bg-gray-300 dark:hover:bg-slate-600 transition-colors"
-                    >
-                        Cancelar
-                    </button>
-                    <button 
-                        type="submit"
-                        className="flex-2 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg flex items-center justify-center gap-2 active:scale-95"
-                    >
-                        <Save size={20} />
-                        Confirmar
-                    </button>
+                <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Operação / Cliente</label>
+                    <input type="text" required placeholder="Ex: LAT-TER" value={formData.operacao} onChange={e => setFormData({...formData, operacao: e.target.value.toUpperCase()})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-black shadow-sm"/>
                 </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Motorista</label>
+                        <input type="text" required placeholder="Nome Completo" value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value.toUpperCase()})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm shadow-sm"/>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Placa</label>
+                        <input type="text" required placeholder="XXX-0000" value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value.toUpperCase()})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-black shadow-sm"/>
+                    </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Início Previsto</label>
+                        <input type="text" required placeholder="00:00:00" value={formData.inicio} onChange={e => setFormData({...formData, inicio: e.target.value})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-mono shadow-sm"/>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase ml-1 tracking-widest">Saída Real</label>
+                        <input type="text" placeholder="00:00:00" value={formData.saida} onChange={e => setFormData({...formData, saida: e.target.value})} className="w-full p-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm font-mono shadow-sm"/>
+                    </div>
+                </div>
+                <button type="submit" disabled={isSyncing} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase tracking-widest text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 border-b-4 border-blue-800">
+                    {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} SALVAR NO SHAREPOINT
+                </button>
             </form>
           </div>
         </div>
