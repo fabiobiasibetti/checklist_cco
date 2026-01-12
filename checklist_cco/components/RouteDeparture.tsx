@@ -2,9 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { RouteDeparture, User } from '../types';
 import { SharePointService } from '../services/sharepointService';
-import { parseRouteDepartures } from '../services/geminiService';
+import { parseRouteDepartures, parseRouteDeparturesManual } from '../services/geminiService';
 // Added ShieldCheck to the imports
-import { Plus, Trash2, Save, Clock, Maximize2, Minimize2, X, Upload, Sparkles, Loader2, RefreshCw, AlertTriangle, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Save, Clock, Maximize2, Minimize2, X, Upload, Sparkles, Loader2, RefreshCw, AlertTriangle, CheckCircle2, ShieldCheck, FileSpreadsheet } from 'lucide-react';
 
 interface RouteConfig {
     operacao: string;
@@ -104,17 +104,43 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return `${month} S${weekNum}`;
   };
 
-  const handleImport = async () => {
+  const handleImport = async (useAI: boolean = false) => {
     const token = getAccessToken();
     if (!importText.trim() || !token) return;
     setIsProcessingImport(true);
     try {
-        const parsed = await parseRouteDepartures(importText);
+        let parsed: Partial<RouteDeparture>[] = [];
+        
+        if (useAI) {
+            parsed = await parseRouteDepartures(importText);
+        } else {
+            parsed = parseRouteDeparturesManual(importText);
+        }
+
+        if (parsed.length === 0) {
+            throw new Error("Nenhum dado válido encontrado para importar.");
+        }
+
         const importPromises = parsed.map(p => {
-            const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === p.operacao?.toUpperCase().trim());
+            // Se a operação vier vazia do manual, tenta atribuir a primeira autorizada
+            let op = p.operacao?.toUpperCase().trim();
+            if (!op || op === '') {
+                op = userConfigs.length > 0 ? userConfigs[0].operacao.toUpperCase().trim() : '';
+            }
+
+            const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === op);
             const { gap, status } = calculateGap(p.inicio || '00:00:00', p.saida || '00:00:00', config?.tolerancia);
+            
             const r: RouteDeparture = {
-                ...p,
+                rota: p.rota || '',
+                data: p.data || '',
+                inicio: p.inicio || '00:00:00',
+                motorista: p.motorista || '',
+                placa: p.placa || '',
+                saida: p.saida || '00:00:00',
+                motivo: p.motivo || '',
+                observacao: p.observacao || '',
+                operacao: op,
                 id: '',
                 semana: calculateWeekString(p.data || ''),
                 statusGeral: 'OK',
@@ -123,13 +149,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 tempo: gap,
                 createdAt: new Date().toISOString()
             } as RouteDeparture;
+
             return SharePointService.updateDeparture(token, r);
         });
+
         await Promise.all(importPromises);
         await loadData();
         setIsImportModalOpen(false);
         setImportText('');
-        alert("Importação concluída com sucesso!");
+        alert(`Importação de ${parsed.length} rotas concluída!`);
     } catch (error: any) {
         alert(`Erro na importação: ${error.message}`);
     } finally {
@@ -187,12 +215,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const toleranceSec = timeToSeconds(config?.tolerancia || "00:00:00");
     const { isOutOfTolerance } = calculateGap(route.inicio, route.saida, config?.tolerancia);
 
-    // Laranja: Teve saída e está fora da tolerância (Letra Branca)
     if (route.saida !== '00:00:00' && isOutOfTolerance) {
         return 'bg-orange-600 text-white font-bold border-orange-700 shadow-inner';
     }
 
-    // Amarelo: Passou o horário de início + tolerância e NÃO saiu ainda
     const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
     const scheduledStartSec = timeToSeconds(route.inicio);
     if (route.saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) {
@@ -257,7 +283,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               {isSyncing && <Loader2 size={16} className="animate-spin text-blue-500 ml-2"/>}
             </h2>
             <div className="flex items-center gap-2">
-                {/* ShieldCheck is now correctly imported from lucide-react */}
                 <ShieldCheck size={12} className="text-emerald-500"/>
                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Sincronizado via {currentUser.email}</p>
             </div>
@@ -275,7 +300,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             <span className="text-xs uppercase tracking-widest">Importar Excel</span>
           </button>
           <button 
-            // Fixed the error: Cannot find name 'openModal'
             onClick={() => setIsModalOpen(true)}
             className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-xl transition-all shadow-md active:scale-95 border-b-4 border-blue-800"
           >
@@ -309,7 +333,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           <tbody>
             {routes.map((route) => {
               const rowStyle = getRowStyle(route);
-              const isAlerted = rowStyle.includes('bg-orange-600') || rowStyle.includes('bg-yellow-400');
               const isWhiteText = rowStyle.includes('text-white');
               
               return (
@@ -397,12 +420,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                         className="w-full h-64 p-5 border-2 dark:border-slate-700 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs font-mono dark:text-white mb-6 focus:ring-4 focus:ring-blue-500/20 outline-none transition-all" 
                         placeholder="ROTA 24133D | DATA 12/01/2026 | INICIO 01:00:00 ..."
                     />
-                    <div className="flex gap-4">
-                        <button onClick={() => setIsImportModalOpen(false)} className="flex-1 py-4 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-black uppercase tracking-widest text-xs rounded-2xl hover:bg-slate-300 transition-all">Cancelar</button>
-                        <button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="flex-[2] py-4 bg-emerald-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-emerald-700 disabled:opacity-50 active:scale-95 border-b-4 border-emerald-800">
-                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><Sparkles size={20} /> Processar com Gemini AI</>}
+                    <div className="grid grid-cols-2 gap-4">
+                        <button onClick={() => handleImport(false)} disabled={isProcessingImport || !importText.trim()} className="py-4 bg-slate-800 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-slate-700 disabled:opacity-50 active:scale-95 border-b-4 border-slate-900">
+                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><FileSpreadsheet size={20} /> Importação Direta (Excel)</>}
+                        </button>
+                        <button onClick={() => handleImport(true)} disabled={isProcessingImport || !importText.trim()} className="py-4 bg-emerald-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-emerald-700 disabled:opacity-50 active:scale-95 border-b-4 border-emerald-800">
+                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><Sparkles size={20} /> Importação com IA</>}
                         </button>
                     </div>
+                    <button onClick={() => setIsImportModalOpen(false)} className="w-full mt-4 py-3 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:text-slate-600">Cancelar</button>
                 </div>
              </div>
         </div>
