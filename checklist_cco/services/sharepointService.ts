@@ -1,5 +1,5 @@
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture } from '../types';
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping } from '../types';
 
 const SITE_PATH = "vialacteoscombr.sharepoint.com:/sites/CCO";
 let cachedSiteId: string | null = null;
@@ -86,10 +86,6 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
-  /**
-   * Explores all relevant SharePoint lists to retrieve their metadata and columns.
-   * This is primarily used by the SharePointExplorer component.
-   */
   async getAllListsMetadata(token: string): Promise<any[]> {
     try {
       const siteId = await getResolvedSiteId(token);
@@ -100,7 +96,8 @@ export const SharePointService = {
         'Historico_checklist_web',
         'Usuarios_cco',
         'CONFIG_SAIDA_DE_ROTAS',
-        'Dados_Saida_de_rotas'
+        'Dados_Saida_de_rotas',
+        'Rotas_Operacao_Checklist'
       ];
 
       const results = await Promise.all(listsToExplore.map(async (listName) => {
@@ -303,6 +300,33 @@ export const SharePointService = {
         console.error("Erro ao carregar configs de rota:", e);
         return [];
     }
+  },
+
+  async getRouteOperationMappings(token: string): Promise<RouteOperationMapping[]> {
+    try {
+        const siteId = await getResolvedSiteId(token);
+        const list = await findListByIdOrName(siteId, 'Rotas_Operacao_Checklist', token);
+        const { mapping } = await getListColumnMapping(siteId, list.id, token);
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
+        return (data.value || []).map((item: any) => ({
+          id: item.id,
+          Title: item.fields.Title,
+          OPERACAO: item.fields[resolveFieldName(mapping, 'OPERACAO')]
+        }));
+    } catch (e) {
+        return [];
+    }
+  },
+
+  async addRouteOperationMapping(token: string, routeName: string, operation: string): Promise<void> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, 'Rotas_Operacao_Checklist', token);
+    const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
+    const fields: any = {
+      Title: routeName,
+      [resolveFieldName(mapping, 'OPERACAO')]: operation
+    };
+    await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
   },
 
   async getDepartures(token: string): Promise<RouteDeparture[]> {

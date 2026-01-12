@@ -56,6 +56,12 @@ export interface RouteDeparture {
   createdAt: string;
 }
 
+export interface RouteOperationMapping {
+  id: string;
+  Title: string; // Nome/Número da Rota
+  OPERACAO: string; // Sigla da Operação
+}
+
 export interface SPTask {
   id: string;
   Title: string;
