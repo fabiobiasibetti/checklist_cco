@@ -45,72 +45,109 @@ export const parseExcelContentToTasks = async (rawText: string): Promise<Partial
 };
 
 /**
- * Manual parser for Excel data (Tab-separated)
- * Expected Order: ROTA | DATA | INICIO | MOTORISTA | PLACA | SAIDA | MOTIVO | OBSERVAÇÃO | (OPERAÇÃO)
+ * Robust Manual Parser for Excel data
+ * Handles DD/MM/YYYY dates and missing columns
  */
 export const parseRouteDeparturesManual = (rawText: string): Partial<RouteDeparture>[] => {
-  const rows = rawText.trim().split(/\r?\n/);
+  const lines = rawText.split(/\r?\n/);
+  const result: Partial<RouteDeparture>[] = [];
   
   const convertDate = (dateStr: string) => {
     if (!dateStr) return '';
-    const parts = dateStr.includes('/') ? dateStr.split('/') : dateStr.split('-');
-    if (parts.length === 3) {
-      // If DD/MM/YYYY -> YYYY-MM-DD
-      if (parts[0].length === 2 && parts[2].length === 4) {
-        return `${parts[2]}-${parts[1]}-${parts[0]}`;
-      }
-      return dateStr;
-    }
-    return dateStr;
+    // Regex para DD/MM/YYYY ou DD-MM-YYYY
+    const ddmmyyyy = dateStr.match(/(\d{2})[\/\-](\d{2})[\/\-](\d{4})/);
+    if (ddmmyyyy) return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+    
+    // Regex para YYYY-MM-DD
+    const yyyymmdd = dateStr.match(/(\d{4})[\/\-](\d{2})[\/\-](\d{2})/);
+    if (yyyymmdd) return `${yyyymmdd[1]}-${yyyymmdd[2]}-${yyyymmdd[3]}`;
+    
+    return '';
   };
 
   const formatTime = (timeStr: string) => {
-    if (!timeStr || timeStr === '00:00:00' || timeStr.trim() === '') return '00:00:00';
-    // Se for apenas HH:mm, adiciona :00
-    if (timeStr.length === 5 && timeStr.includes(':')) return `${timeStr}:00`;
-    return timeStr;
+    if (!timeStr || timeStr.trim() === '' || timeStr === '00:00:00') return '00:00:00';
+    const timeMatch = timeStr.match(/(\d{2}:\d{2}(?::\d{2})?)/);
+    if (timeMatch) {
+        let t = timeMatch[1];
+        if (t.length === 5) t += ':00';
+        return t;
+    }
+    return '00:00:00';
   };
 
-  return rows.map(row => {
-    // Splits by Tab (Standard Excel) or double spaces (fallback)
-    const cols = row.split(/\t| {2,}/).map(c => c.trim());
+  const dateRegex = /(\d{2}[\/\-]\d{2}[\/\-]\d{4})/;
+  const timeRegex = /(\d{2}:\d{2}(?::\d{2})?)/g;
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    // Se a linha tiver uma data, é uma nova rota
+    const dateMatch = line.match(dateRegex);
     
-    return {
-      rota: cols[0] || '',
-      data: convertDate(cols[1] || ''),
-      inicio: formatTime(cols[2] || '00:00:00'),
-      motorista: cols[3] || '',
-      placa: cols[4] || '',
-      saida: formatTime(cols[5] || '00:00:00'),
-      motivo: cols[6] || '',
-      observacao: cols[7] || '',
-      operacao: cols[8] || '' 
-    };
-  }).filter(r => r.rota && r.data);
+    if (dateMatch) {
+      const dateStr = dateMatch[1];
+      const tabs = line.split('\t');
+      
+      if (tabs.length >= 3) {
+          // Caso padrão: Colado direto do Excel (Tabulado)
+          result.push({
+            rota: tabs[0] || '',
+            data: convertDate(tabs[1] || ''),
+            inicio: formatTime(tabs[2] || '00:00:00'),
+            motorista: tabs[3] || '',
+            placa: tabs[4] || '',
+            saida: formatTime(tabs[5] || '00:00:00'),
+            motivo: tabs[6] || '',
+            observacao: tabs[7] || '',
+            operacao: tabs[8] || ''
+          });
+      } else {
+          // Caso fallback: Espaços irregulares (Heurística baseada em âncoras)
+          const dateIdx = line.indexOf(dateStr);
+          const rota = line.substring(0, dateIdx).trim();
+          const afterDate = line.substring(dateIdx + dateStr.length).trim();
+          
+          const times = afterDate.match(timeRegex) || [];
+          const inicio = times[0] || '00:00:00';
+          const saida = times[1] || '00:00:00';
+          
+          // Tenta extrair motorista e placa entre os horários ou após a data
+          const parts = afterDate.split(/\s+/).filter(p => !p.match(timeRegex));
+          const placa = parts.length > 0 ? parts[parts.length - 1] : '';
+          const motorista = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
+
+          result.push({
+            rota: rota,
+            data: convertDate(dateStr),
+            inicio: formatTime(inicio),
+            motorista: motorista,
+            placa: placa,
+            saida: formatTime(saida),
+            motivo: '',
+            observacao: '',
+            operacao: ''
+          });
+      }
+    } else if (result.length > 0) {
+      // Linha sem data: Provavelmente continuação da Observação da linha anterior
+      const last = result[result.length - 1];
+      last.observacao = (last.observacao + ' ' + line).trim();
+    }
+  }
+
+  // Filtra rotas que não conseguiram converter a data corretamente (evita Invalid Date no SharePoint)
+  return result.filter(r => r.rota && r.data && r.data !== '');
 };
 
 export const parseRouteDepartures = async (rawText: string): Promise<Partial<RouteDeparture>[]> => {
-  // Check if API KEY is available before calling
   if (!process.env.API_KEY) {
-      throw new Error("API Key não configurada no ambiente. Por favor, utilize a Importação Direta.");
+      throw new Error("API Key não detectada. Use a 'Importação Direta'.");
   }
 
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const prompt = `
-    Atue como um especialista em logística. Extraia os dados do texto abaixo (copiado de um Excel) para um JSON estruturado.
-    MODELO DE COLUNAS: ROTA, DATA, INICIO, MOTORISTA, PLACA, SAIDA, MOTIVO, OBSERVAÇÃO, OPERAÇÃO.
-    
-    REGRAS:
-    - DATA: Converta para YYYY-MM-DD.
-    - HORÁRIOS (INICIO/SAIDA): Garanta formato HH:mm:ss. Se vazio use "00:00:00".
-    - OPERAÇÃO: Identifique a sigla (ex: LAT-UNA, LAT-TER).
-    
-    TEXTO:
-    """
-    ${rawText}
-    """
-  `;
+  const prompt = `Extraia dados logísticos de: """${rawText}""". Formato: ROTA, DATA(YYYY-MM-DD), INICIO, MOTORISTA, PLACA, SAIDA, MOTIVO, OBSERVAÇÃO, OPERAÇÃO.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -133,18 +170,14 @@ export const parseRouteDepartures = async (rawText: string): Promise<Partial<Rou
               observacao: { type: Type.STRING },
               operacao: { type: Type.STRING }
             },
-            required: ["rota", "data", "operacao"]
+            required: ["rota", "data"]
           }
         }
       }
     });
-
-    if (response.text) {
-      return JSON.parse(response.text.trim());
-    }
-    return [];
+    return response.text ? JSON.parse(response.text.trim()) : [];
   } catch (error) {
-    console.error("Error parsing departures with Gemini:", error);
+    console.error("Gemini Error:", error);
     throw error;
   }
 };

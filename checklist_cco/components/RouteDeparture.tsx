@@ -95,13 +95,16 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const calculateWeekString = (dateStr: string) => {
-    if (!dateStr) return '';
-    const date = new Date(dateStr + 'T12:00:00');
-    const monthNames = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
-    const month = monthNames[date.getMonth()];
-    const day = date.getDate();
-    const weekNum = Math.ceil(day / 7);
-    return `${month} S${weekNum}`;
+    if (!dateStr || dateStr === '') return '';
+    try {
+        const date = new Date(dateStr + 'T12:00:00');
+        if (isNaN(date.getTime())) return '';
+        const monthNames = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
+        const month = monthNames[date.getMonth()];
+        const day = date.getDate();
+        const weekNum = Math.ceil(day / 7);
+        return `${month} S${weekNum}`;
+    } catch(e) { return ''; }
   };
 
   const handleImport = async (useAI: boolean = false) => {
@@ -118,11 +121,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         }
 
         if (parsed.length === 0) {
-            throw new Error("Nenhum dado válido encontrado para importar.");
+            throw new Error("Nenhum dado válido identificado. Verifique se copiou as colunas ROTA e DATA corretamente.");
         }
 
         const importPromises = parsed.map(p => {
-            // Se a operação vier vazia do manual, tenta atribuir a primeira autorizada
+            // Atribuição automática da operação
             let op = p.operacao?.toUpperCase().trim();
             if (!op || op === '') {
                 op = userConfigs.length > 0 ? userConfigs[0].operacao.toUpperCase().trim() : '';
@@ -133,7 +136,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             
             const r: RouteDeparture = {
                 rota: p.rota || '',
-                data: p.data || '',
+                data: p.data || '', // Já vem em YYYY-MM-DD do parser robusto
                 inicio: p.inicio || '00:00:00',
                 motorista: p.motorista || '',
                 placa: p.placa || '',
@@ -157,7 +160,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         await loadData();
         setIsImportModalOpen(false);
         setImportText('');
-        alert(`Importação de ${parsed.length} rotas concluída!`);
+        alert(`Sucesso! ${parsed.length} rotas importadas.`);
     } catch (error: any) {
         alert(`Erro na importação: ${error.message}`);
     } finally {
@@ -412,21 +415,19 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 </div>
                 <div className="p-8">
                     <div className="mb-4 text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                        <Sparkles size={14} className="text-blue-500"/> Copie as linhas do Excel e cole abaixo
+                        <FileSpreadsheet size={14} className="text-blue-500"/> Copie as linhas do Excel e cole abaixo
                     </div>
                     <textarea 
                         value={importText} 
                         onChange={e => setImportText(e.target.value)} 
                         className="w-full h-64 p-5 border-2 dark:border-slate-700 rounded-2xl bg-slate-50 dark:bg-slate-800 text-xs font-mono dark:text-white mb-6 focus:ring-4 focus:ring-blue-500/20 outline-none transition-all" 
-                        placeholder="ROTA 24133D | DATA 12/01/2026 | INICIO 01:00:00 ..."
+                        placeholder="Cole aqui os dados copiados do Excel..."
                     />
-                    <div className="grid grid-cols-2 gap-4">
-                        <button onClick={() => handleImport(false)} disabled={isProcessingImport || !importText.trim()} className="py-4 bg-slate-800 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-slate-700 disabled:opacity-50 active:scale-95 border-b-4 border-slate-900">
-                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><FileSpreadsheet size={20} /> Importação Direta (Excel)</>}
+                    <div className="flex flex-col gap-3">
+                        <button onClick={() => handleImport(false)} disabled={isProcessingImport || !importText.trim()} className="w-full py-4 bg-slate-900 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-slate-800 disabled:opacity-50 active:scale-95 border-b-4 border-slate-950">
+                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><FileSpreadsheet size={20} /> Importação Direta (Recomendado)</>}
                         </button>
-                        <button onClick={() => handleImport(true)} disabled={isProcessingImport || !importText.trim()} className="py-4 bg-emerald-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl flex items-center justify-center gap-3 transition-all hover:bg-emerald-700 disabled:opacity-50 active:scale-95 border-b-4 border-emerald-800">
-                            {isProcessingImport ? <Loader2 size={20} className="animate-spin" /> : <><Sparkles size={20} /> Importação com IA</>}
-                        </button>
+                        <p className="text-[9px] text-center text-slate-400 font-bold uppercase">Utiliza algoritmo robusto para identificar as colunas automaticamente</p>
                     </div>
                     <button onClick={() => setIsImportModalOpen(false)} className="w-full mt-4 py-3 text-slate-400 font-black uppercase text-[10px] tracking-widest hover:text-slate-600">Cancelar</button>
                 </div>
