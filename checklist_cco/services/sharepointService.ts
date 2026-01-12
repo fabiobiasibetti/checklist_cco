@@ -6,7 +6,6 @@ let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, { mapping: Record<string, string>, readOnly: Set<string>, internalNames: Set<string> }> = {};
 
 async function graphFetch(endpoint: string, token: string, options: RequestInit = {}) {
-  // Adiciona timestamp para evitar cache do navegador em requisições GET
   const separator = endpoint.includes('?') ? '&' : '?';
   const url = endpoint.startsWith('https://') 
     ? endpoint 
@@ -87,7 +86,51 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
-  // ... (Outros métodos getTasks, getOperations, etc permanecem iguais)
+  /**
+   * Explores all relevant SharePoint lists to retrieve their metadata and columns.
+   * This is primarily used by the SharePointExplorer component.
+   */
+  async getAllListsMetadata(token: string): Promise<any[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const listsToExplore = [
+        'Tarefas_Checklist',
+        'Operacoes_Checklist',
+        'Status_Checklist',
+        'Historico_checklist_web',
+        'Usuarios_cco',
+        'CONFIG_SAIDA_DE_ROTAS',
+        'Dados_Saida_de_rotas'
+      ];
+
+      const results = await Promise.all(listsToExplore.map(async (listName) => {
+        try {
+          const list = await findListByIdOrName(siteId, listName, token);
+          const columnsResponse = await graphFetch(`/sites/${siteId}/lists/${list.id}/columns`, token);
+          return {
+            list: {
+              id: list.id,
+              displayName: list.displayName,
+              webUrl: list.webUrl
+            },
+            columns: columnsResponse.value || [],
+            error: null
+          };
+        } catch (e: any) {
+          return {
+            list: { displayName: listName, id: listName, webUrl: '#' },
+            columns: [],
+            error: e.message
+          };
+        }
+      }));
+      return results;
+    } catch (e) {
+      console.error("Error fetching all lists metadata:", e);
+      return [];
+    }
+  },
+
   async getTasks(token: string): Promise<SPTask[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -239,13 +282,34 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
+  async getRouteConfigs(token: string, userEmail: string): Promise<any[]> {
+    try {
+        const siteId = await getResolvedSiteId(token);
+        const list = await findListByIdOrName(siteId, 'CONFIG_SAIDA_DE_ROTAS', token);
+        const { mapping } = await getListColumnMapping(siteId, list.id, token);
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
+        
+        return (data.value || [])
+          .map((item: any) => {
+            const f = item.fields;
+            return {
+                operacao: f[resolveFieldName(mapping, 'OPERACAO')] || "",
+                email: (f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(),
+                tolerancia: f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00"
+            };
+          })
+          .filter(c => c.email === userEmail.toLowerCase().trim());
+    } catch (e) {
+        console.error("Erro ao carregar configs de rota:", e);
+        return [];
+    }
+  },
+
   async getDepartures(token: string): Promise<RouteDeparture[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
-      
-      // Busca itens com expand=fields para pegar os dados reais das colunas
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
       
       return (data.value || []).map((item: any) => {
@@ -305,8 +369,6 @@ export const SharePointService = {
       }
     });
 
-    // Melhora na verificação se é atualização:
-    // Se temos um ID populado e não é um valor temporário/0
     const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
 
     if (isUpdate) {
@@ -328,17 +390,5 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}`, token, { method: 'DELETE' });
-  },
-
-  async getAllListsMetadata(token: string) {
-    const listNames = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco', 'Dados_Saida_de_rotas'];
-    return Promise.all(listNames.map(async name => {
-      try {
-        const siteId = await getResolvedSiteId(token);
-        const list = await findListByIdOrName(siteId, name, token);
-        const columns = await graphFetch(`/sites/${siteId}/lists/${list.id}/columns`, token);
-        return { list, columns: columns.value || [] };
-      } catch (e) { return { list: { displayName: name, id: 'error' }, error: true }; }
-    }));
   }
 };
