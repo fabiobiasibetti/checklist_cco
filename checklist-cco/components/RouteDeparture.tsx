@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RouteDeparture, User, RouteOperationMapping } from '../types';
 import { SharePointService } from '../services/sharepointService';
@@ -100,7 +99,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     placa: 100,
     saida: 95,
     motivo: 170,
-    observacao: 350,
+    observacao: 400,
     geral: 70,
     operacao: 140,
     status: 90,
@@ -112,7 +111,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const obsDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Fix: Explicitly type getAccessToken to return string to avoid "unknown" type issues
   const getAccessToken = (): string => (window as any).__access_token || '';
 
   const [formData, setFormData] = useState<Partial<RouteDeparture>>({
@@ -140,12 +138,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!token) return;
     setIsLoading(true);
     try {
-      // Fix: token is now guaranteed string from getAccessToken
-      const [configs, mappings, spData] = await Promise.all([
+      // Fixed: Explicitly cast Promise.all result to avoid 'unknown' errors (Line 185 etc)
+      const [configs, mappings, spData] = (await Promise.all([
         SharePointService.getRouteConfigs(token, currentUser.email),
         SharePointService.getRouteOperationMappings(token),
         SharePointService.getDepartures(token)
-      ]);
+      ])) as [RouteConfig[], RouteOperationMapping[], RouteDeparture[]];
       
       setUserConfigs(configs || []);
       setRouteMappings(mappings || []);
@@ -195,10 +193,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
   };
 
+  // Carregamento inicial (independente de selectedIds)
   useEffect(() => {
     loadData();
     const timer = setInterval(() => setCurrentTime(new Date()), 10000);
-    
+    return () => clearInterval(timer);
+  }, [currentUser]);
+
+  // Listeners de UI e atalhos
+  useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (resizingRef.current) {
         const { col, startX, startWidth } = resizingRef.current;
@@ -250,14 +253,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
     
     return () => {
-      clearInterval(timer);
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('mousedown', handleClickOutside);
       window.removeEventListener('keydown', handleKeyDown);
       if (container) container.removeEventListener('wheel', handleWheel);
     };
-  }, [currentUser, selectedIds]);
+  }, [selectedIds]);
 
   const startResize = (e: React.MouseEvent, col: string) => {
     e.preventDefault();
@@ -374,7 +376,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             const toleranceStr = config?.tolerancia || "00:00:00";
             const { gap, status } = calculateGap(inicioStr, saidaStr, toleranceStr);
             
-            // Fix: token is string
             await SharePointService.updateDeparture(token, { ...item, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture);
         }
         await loadData();
@@ -401,18 +402,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!token) return;
     setIsSyncing(true);
     try {
-        const promises = pendingItems.map(async (item) => {
+        // Fixed: Cast item as any to avoid 'unknown' errors (Lines 465, 466 etc)
+        const promises = pendingItems.map(async (item: any) => {
             if (item.operacao && item.rota) {
                 const existingMapping = routeMappings.find(m => m.Title === (item.rota as string));
-                // Fix: token is guaranteed string here
                 if (!existingMapping) await SharePointService.addRouteOperationMapping(token, item.rota as string, item.operacao as string);
                 const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (item.operacao as string).toUpperCase().trim());
+                
                 const { gap, status } = calculateGap(
                   String(item.inicio || '00:00:00'), 
                   String(item.saida || '00:00:00'), 
                   String(config?.tolerancia || "00:00:00")
                 );
-                // Fix: Redundant String() conversion removed, token is already string
                 return SharePointService.updateDeparture(token, { ...item, statusOp: status, tempo: gap } as RouteDeparture);
             }
             return Promise.resolve();
@@ -433,7 +434,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (formData.operacao || "").toUpperCase().trim());
         const { gap, status } = calculateGap(formData.inicio || '00:00:00', formData.saida || '00:00:00', config?.tolerancia || "00:00:00");
         const newRoute: RouteDeparture = { ...formData, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
-        // Fix: token is string
         await SharePointService.updateDeparture(token, newRoute);
         await loadData();
         setIsModalOpen(false);
@@ -509,7 +509,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-[#121214] rounded-xl border border-[#1e1e24] shadow-2xl relative scrollbar-thin overflow-x-auto">
         <div style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left', width: `${100 / zoomLevel}%` }}>
-            <table className="border-collapse table-fixed w-full min-w-max">
+            <table className="border-collapse table-fixed w-full min-w-max h-px">
               <thead className="sticky top-0 z-50 bg-blue-700 text-white shadow-lg">
                 <tr className="h-10">
                   {[
@@ -551,22 +551,16 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   const isEven = idx % 2 === 0;
                   const rowBg = isSelected ? 'bg-blue-600/20' : (isEven ? 'bg-[#121214]' : 'bg-[#18181b]');
                   const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-bold text-white uppercase tracking-tight transition-all focus:bg-blue-500/10 placeholder-slate-400";
-                  const obsClass = `w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-100 transition-all focus:bg-blue-500/10 placeholder-slate-400 ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate'}`;
-
-                  const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
-                  const tolerance = String(config?.tolerancia || "00:00:00");
-                  const toleranceSec = timeToSeconds(tolerance);
-                  const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
-                  const scheduledStartSec = timeToSeconds(String(route.inicio || "00:00:00"));
-                  let displayStatus = route.statusOp;
-                  if (route.saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) {
-                      displayStatus = 'Atrasado';
-                  }
+                  
+                  // Configurações dinâmicas de observação
+                  const obsValue = route.observacao || "";
+                  const displayStatus = route.statusOp;
+                  const showDetails = displayStatus !== 'OK';
 
                   return (
-                    <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all ${isTextWrapEnabled ? 'min-h-[2.25rem]' : 'h-9'} hover:bg-blue-900/10`}>
+                    <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all hover:bg-blue-900/10 h-auto`}>
                       <td 
-                        className={`p-0 border-r border-[#1e1e24] cursor-pointer transition-colors ${isSelected ? 'bg-blue-500' : 'hover:bg-slate-700'}`} 
+                        className={`p-0 border-r border-[#1e1e24] cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-blue-500' : 'hover:bg-slate-700'}`} 
                         onClick={() => toggleSelection(route.id)}
                       ></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${textClass} text-left font-black text-blue-400`} /></td>
@@ -576,32 +570,68 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value.toUpperCase())} className={`${textClass} font-mono tracking-widest text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} className={`${textClass} font-mono text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]">
-                        {displayStatus !== 'OK' ? (
+                        {showDetails ? (
                           <div className="flex items-center justify-center h-full px-2">
-                              <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-[#1e1e24] border border-slate-700 rounded px-1 py-0.5 text-[10px] font-black uppercase text-white outline-none appearance-none text-center focus:border-blue-500">
-                                  <option value="">SELECIONE...</option>
-                                  {MOTIVOS.map(m => (<option key={m} value={m}>{m.toUpperCase()}</option>))}
+                              <select 
+                                value={route.motivo} 
+                                onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} 
+                                className="w-full bg-[#1e1e24] border border-slate-700 rounded px-1 py-1 text-[10px] font-black text-white outline-none appearance-none text-center focus:border-blue-500"
+                              >
+                                  <option value="">Selecione...</option>
+                                  {MOTIVOS.map(m => (<option key={m} value={m}>{m}</option>))}
                               </select>
                           </div>
                         ) : null}
                       </td>
-                      <td className="p-0 border-r border-[#1e1e24] relative group/obs">
-                        {displayStatus !== 'OK' ? (
-                          <div className="flex items-start w-full h-full relative">
-                            <textarea 
-                              rows={isTextWrapEnabled ? undefined : 1}
-                              value={route.observacao} 
-                              onFocus={() => setActiveObsId(route.id)}
-                              onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} 
-                              className={`${obsClass} pr-8 resize-none`} 
-                              placeholder="Descreva..." 
-                            />
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }}
-                              className="absolute right-2 top-2 p-0.5 text-slate-500 hover:text-blue-400 transition-colors opacity-30 group-hover/obs:opacity-100"
-                            >
-                              <ChevronDown size={12} />
-                            </button>
+                      <td className="p-0 border-r border-[#1e1e24] relative group/obs align-top h-full">
+                        {showDetails ? (
+                          <div className="flex items-start w-full h-full relative p-0">
+                            {isTextWrapEnabled ? (
+                                <div className="w-full min-h-[36px] flex flex-col relative">
+                                    <textarea 
+                                        value={obsValue}
+                                        onChange={(e) => updateCell(route.id, 'observacao', e.target.value)}
+                                        onFocus={() => setActiveObsId(route.id)}
+                                        placeholder="Descreva..."
+                                        className="w-full h-full min-h-[36px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-100 placeholder-slate-400 resize-none overflow-hidden"
+                                        style={{ height: 'auto', minHeight: '36px' }}
+                                        onInput={(e) => {
+                                            const el = e.target as HTMLTextAreaElement;
+                                            el.style.height = 'auto';
+                                            el.style.height = el.scrollHeight + 'px';
+                                        }}
+                                        ref={(el) => {
+                                            if (el) {
+                                                el.style.height = 'auto';
+                                                el.style.height = el.scrollHeight + 'px';
+                                            }
+                                        }}
+                                    />
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }}
+                                      className="absolute right-2 top-2 p-0.5 text-slate-500 hover:text-blue-400 transition-colors opacity-30 group-hover/obs:opacity-100"
+                                    >
+                                      <ChevronDown size={12} />
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="flex items-center w-full h-9 relative">
+                                    <input 
+                                        type="text"
+                                        value={obsValue} 
+                                        onFocus={() => setActiveObsId(route.id)}
+                                        onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} 
+                                        className="w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-100 transition-all focus:bg-blue-500/10 placeholder-slate-400 truncate pr-8" 
+                                        placeholder="Descreva..." 
+                                    />
+                                    <button 
+                                      onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }}
+                                      className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-blue-400 transition-colors opacity-30 group-hover/obs:opacity-100"
+                                    >
+                                      <ChevronDown size={12} />
+                                    </button>
+                                </div>
+                            )}
                           </div>
                         ) : null}
                         {activeObsId === route.id && (
@@ -612,7 +642,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             </div>
                             <div className="max-h-48 overflow-y-auto scrollbar-thin">
                               {(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : Object.values(OBSERVATION_TEMPLATES).flat())
-                                .filter(t => t.toLowerCase().includes((route.observacao || "").toLowerCase()))
+                                .filter(t => t.toLowerCase().includes(obsValue.toLowerCase()))
                                 .map((template, tIdx) => (
                                   <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-2 text-[10px] text-slate-300 hover:bg-blue-600 hover:text-white cursor-pointer transition-all border-b border-slate-800 last:border-0 flex items-center gap-2">
                                     <ChevronRight size={10} className="shrink-0" />
@@ -623,12 +653,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                           </div>
                         )}
                       </td>
-                      <td className="p-0 border-r border-[#1e1e24]"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
-                      <td className="p-1 border-r border-[#1e1e24] text-center font-black uppercase text-[9px] text-slate-300">{route.operacao || "---"}</td>
-                      <td className="p-1 border-r border-[#1e1e24] text-center">
+                      <td className="p-0 border-r border-[#1e1e24] align-middle"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
+                      <td className="p-1 border-r border-[#1e1e24] text-center font-black uppercase text-[9px] text-slate-300 align-middle">{route.operacao || "---"}</td>
+                      <td className="p-1 border-r border-[#1e1e24] text-center align-middle">
                         <span className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black border ${displayStatus === 'OK' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-red-900/30 border-red-800 text-red-400'}`}>{displayStatus}</span>
                       </td>
-                      <td className="p-1 border-r border-[#1e1e24] text-center font-mono font-bold text-[10px] text-white">{route.tempo}</td>
+                      <td className="p-1 border-r border-[#1e1e24] text-center font-mono font-bold text-[10px] text-white align-middle">{route.tempo}</td>
                     </tr>
                   );
                 })}
