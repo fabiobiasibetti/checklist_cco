@@ -62,9 +62,7 @@ const OBSERVATION_TEMPLATES: Record<string, string[]> = {
   'Infraestrutura': []
 };
 
-// Componente de Filtro extraído para evitar perda de foco durante re-renders
 const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilters, setSelectedFilters, onClose, innerRef }: any) => {
-    // Fix: Explicitly type values as string[] to ensure 'v' is treated as string in filter and map operations
     const values: string[] = Array.from(new Set(routes.map((r: any) => String(r[col] || "")))).sort() as string[];
     const selected = (selectedFilters[col] as string[]) || [];
     
@@ -180,7 +178,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (confirm(`Deseja excluir os ${selectedIds.size} registros selecionados?`)) {
         setIsSyncing(true);
         try {
-            // Fix: Explicitly type id as string to satisfy SharePointService parameter type
             await Promise.all(Array.from(selectedIds).map((id: string) => SharePointService.deleteDeparture(token, id)));
             setRoutes(prev => prev.filter(r => !selectedIds.has(r.id)));
             setSelectedIds(new Set());
@@ -338,14 +335,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const saida = String(route.saida || "00:00:00");
     const { isOutOfTolerance, status } = calculateGap(inicio, saida, tolerance);
     
-    // Design Minimalista: Cores Pastel + Borda Esquerda
-    if (saida !== '00:00:00' && status === 'Atrasado') return "border-l-4 border-orange-500 bg-orange-50/50";
-    if (status === 'Adiantado') return "border-l-4 border-blue-500 bg-blue-50/50";
+    // Design Minimalista: Cores Mais Vibrantes para Visibilidade (Realce)
+    if (saida !== '00:00:00' && status === 'Atrasado') return "border-l-[6px] border-orange-600 bg-orange-100/80 shadow-sm";
+    if (status === 'Adiantado') return "border-l-[6px] border-blue-600 bg-blue-100/80 shadow-sm";
     
     const toleranceSec = timeToSeconds(tolerance);
     const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
     const scheduledStartSec = timeToSeconds(inicio);
-    if (saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) return "border-l-4 border-yellow-500 bg-yellow-50/50";
+    if (saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) return "border-l-[6px] border-yellow-500 bg-yellow-100/80 shadow-sm";
     
     return "border-l-4 border-transparent";
   };
@@ -396,37 +393,37 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   if (isLoading) return (
-    <div className="h-full flex flex-col items-center justify-center text-primary-600 gap-4 bg-[#F8F9FA]">
+    <div className="h-full flex flex-col items-center justify-center text-primary-500 gap-4 bg-[#020617]">
         <Loader2 size={48} className="animate-spin" />
-        <p className="font-bold animate-pulse text-[10px] uppercase tracking-[0.3em]">Gestão de Rotas CCO...</p>
+        <p className="font-bold animate-pulse text-[10px] uppercase tracking-[0.3em] text-slate-400">Gestão de Rotas CCO...</p>
     </div>
   );
 
   return (
-    <div className="flex flex-col h-full animate-fade-in bg-[#F8F9FA] p-4 overflow-hidden select-none">
+    <div className="flex flex-col h-full animate-fade-in bg-[#020617] p-4 overflow-hidden select-none">
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
-          <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg"><Clock size={20} /></div>
+          <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg shadow-primary-600/20"><Clock size={20} /></div>
           <div>
-            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight flex items-center gap-3">Saída de Rotas{isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}</h2>
-            <div className="flex items-center gap-2"><ShieldCheck size={12} className="text-emerald-500"/><p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">CCO Logística: {currentUser.name}</p></div>
+            <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">Saída de Rotas{isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}</h2>
+            <div className="flex items-center gap-2"><ShieldCheck size={12} className="text-emerald-500"/><p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">CCO Logística: {currentUser.name}</p></div>
           </div>
         </div>
         <div className="flex gap-2 items-center">
           <button 
             onClick={() => setIsTextWrapEnabled(!isTextWrapEnabled)} 
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isTextWrapEnabled ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] tracking-wide transition-all shadow-sm ${isTextWrapEnabled ? 'bg-primary-600 text-white border-primary-600' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'}`}
           >
             <AlignLeft size={16} /> Quebra de Linha
           </button>
-          <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-white text-slate-600 rounded-lg hover:bg-slate-50 font-bold border border-slate-200 uppercase text-[10px] tracking-wide transition-all shadow-sm"><BarChart3 size={16} /> Indicadores</button>
-          <button onClick={loadData} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all border border-slate-200 bg-white"><RefreshCw size={18} /></button>
-          <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 font-bold border border-emerald-600 uppercase text-[10px] tracking-wide shadow-sm transition-all"><Upload size={16} /> Importar</button>
+          <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm"><BarChart3 size={16} /> Indicadores</button>
+          <button onClick={loadData} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-700 bg-slate-900"><RefreshCw size={18} /></button>
+          <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold border border-emerald-700 uppercase text-[10px] tracking-wide shadow-sm transition-all"><Upload size={16} /> Importar</button>
           <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-bold border border-primary-700 uppercase text-[10px] tracking-wide shadow-md transition-all"><Plus size={16} /> Nova Rota</button>
         </div>
       </div>
 
-      <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white rounded-2xl border border-slate-200 shadow-xl relative scrollbar-thin overflow-x-auto">
+      <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white rounded-2xl border border-slate-700/50 shadow-2xl relative scrollbar-thin overflow-x-auto">
         <div style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left', width: `${100 / zoomLevel}%` }}>
             <table className="border-collapse table-fixed w-full min-w-max h-px">
               <thead className="sticky top-0 z-50 bg-[#1e293b] text-white shadow-md">
@@ -446,7 +443,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     { id: 'status', label: 'STATUS' },
                     { id: 'tempo', label: 'TEMPO' }
                   ].map(col => {
-                    if (col.id === 'select') return <th key={col.id} style={{ width: colWidths.select }} className="bg-slate-800"></th>;
+                    if (col.id === 'select') return <th key={col.id} style={{ width: colWidths.select }} className="bg-slate-900/50"></th>;
                     const hasFilter = !!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0;
                     return (
                       <th key={col.id} style={{ width: colWidths[col.id] }} className="relative p-1 border-r border-slate-700/50 text-[10px] font-black uppercase tracking-wider text-left select-none group">
@@ -476,8 +473,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 {filteredRoutes.map((route, idx) => {
                   const alertClasses = getAlertStyles(route);
                   const isSelected = selectedIds.has(route.id);
-                  const rowBg = isSelected ? 'bg-primary-50/80' : 'bg-white hover:bg-slate-50';
-                  const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold text-slate-700 uppercase transition-all placeholder-slate-300";
+                  const rowBg = isSelected ? 'bg-primary-100/50' : 'bg-white hover:bg-slate-50';
+                  const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold text-slate-800 uppercase transition-all placeholder-slate-300";
                   
                   const displayStatus = route.statusOp;
                   const showDetails = displayStatus !== 'OK';
@@ -485,7 +482,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   return (
                     <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all h-auto`}>
                       <td 
-                        className={`p-0 border-r border-slate-100 cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-primary-500' : 'hover:bg-slate-100'}`} 
+                        className={`p-0 border-r border-slate-100 cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-primary-500' : 'hover:bg-slate-200'}`} 
                         onClick={() => toggleSelection(route.id)}
                       ></td>
                       <td className="p-0 border-r border-slate-100"><input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${textClass} font-black text-primary-600`} /></td>
@@ -500,7 +497,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                               <select 
                                 value={route.motivo} 
                                 onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} 
-                                className="w-full bg-slate-100 border-none rounded-lg px-2 py-1 text-[10px] font-bold text-slate-600 outline-none appearance-none text-center shadow-sm"
+                                className="w-full bg-slate-100 border-none rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 outline-none appearance-none text-center shadow-sm"
                               >
                                   <option value="">Selecione...</option>
                                   {MOTIVOS.map(m => (<option key={m} value={m}>{m}</option>))}
@@ -516,7 +513,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                 onChange={(e) => updateCell(route.id, 'observacao', e.target.value)}
                                 onFocus={() => setActiveObsId(route.id)}
                                 placeholder="Descreva..."
-                                className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-600 placeholder-slate-300 resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate pr-8'}`}
+                                className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-800 placeholder-slate-400 resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate pr-8'}`}
                                 style={{ height: isTextWrapEnabled ? 'auto' : '44px' }}
                                 onInput={(e) => {
                                     if (isTextWrapEnabled) {
@@ -533,7 +530,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                 }}
                             />
                             {!isTextWrapEnabled && (
-                                <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-300 hover:text-primary-500 transition-colors opacity-30 group-hover/obs:opacity-100"><ChevronDown size={12} /></button>
+                                <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-primary-600 transition-colors opacity-40 group-hover/obs:opacity-100"><ChevronDown size={12} /></button>
                             )}
                           </div>
                         ) : null}
@@ -542,18 +539,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             <div className="p-2 border-b border-slate-100 flex items-center justify-between"><span className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Modelos: {route.motivo || 'Geral'}</span><X size={10} className="text-slate-400 cursor-pointer" onClick={() => setActiveObsId(null)} /></div>
                             <div className="max-h-48 overflow-y-auto scrollbar-thin">
                               {(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : Object.values(OBSERVATION_TEMPLATES).flat()).filter(t => t.toLowerCase().includes((route.observacao || "").toLowerCase())).map((template, tIdx) => (
-                                  <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-2 text-[10px] text-slate-500 hover:bg-primary-50 hover:text-primary-700 cursor-pointer transition-all border-b border-slate-50 last:border-0 flex items-center gap-2"><ChevronRight size={10} className="shrink-0" />{template}</div>
+                                  <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-2 text-[10px] text-slate-600 hover:bg-primary-50 hover:text-primary-700 cursor-pointer transition-all border-b border-slate-50 last:border-0 flex items-center gap-2"><ChevronRight size={10} className="shrink-0" />{template}</div>
                                 ))}
                             </div>
                           </div>
                         )}
                       </td>
-                      <td className="p-0 border-r border-slate-100 align-middle"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent border-none text-[10px] font-bold text-center appearance-none text-slate-600"><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
-                      <td className="p-1 border-r border-slate-100 text-center font-bold uppercase text-[9px] text-slate-400 align-middle">{route.operacao || "---"}</td>
+                      <td className="p-0 border-r border-slate-100 align-middle"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent border-none text-[10px] font-bold text-center appearance-none text-slate-700"><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
+                      <td className="p-1 border-r border-slate-100 text-center font-bold uppercase text-[9px] text-slate-500 align-middle">{route.operacao || "---"}</td>
                       <td className="p-1 border-r border-slate-100 text-center align-middle">
                         <span className={`px-2 py-1 rounded-full text-[8px] font-black border ${displayStatus === 'OK' ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-red-50 border-red-100 text-red-600'}`}>{displayStatus}</span>
                       </td>
-                      <td className="p-1 border-r border-slate-100 text-center font-mono font-bold text-[10px] text-slate-500 align-middle">{route.tempo}</td>
+                      <td className="p-1 border-r border-slate-100 text-center font-mono font-bold text-[10px] text-slate-600 align-middle">{route.tempo}</td>
                     </tr>
                   );
                 })}
@@ -563,7 +560,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       </div>
 
       {isStatsModalOpen && dashboardStats && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[200] flex items-center justify-center p-6">
             <div className="bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in duration-300">
                 <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
                     <div className="flex items-center gap-4"><div className="p-2.5 bg-white/10 rounded-xl"><TrendingUp size={24} /></div><div><h3 className="font-black uppercase tracking-widest text-base leading-none">Dashboard de Performance</h3><p className="text-slate-400 text-[10px] font-bold uppercase mt-1">Resumo ({dashboardStats.total} rotas filtradas)</p></div></div>
@@ -599,11 +596,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       )}
 
       {isImportModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
              <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-200">
                 <div className="bg-emerald-500 p-6 flex justify-between items-center text-white"><div className="flex items-center gap-3"><Upload size={20} className="bg-white/20 p-1.5 rounded-lg" /><h3 className="font-black uppercase tracking-widest text-xs">Importar Dados Excel</h3></div><button onClick={() => setIsImportModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg transition-all"><X size={20} /></button></div>
                 <div className="p-8">
-                    <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-5 border-2 border-slate-100 rounded-2xl bg-slate-50 text-[11px] font-mono mb-6 focus:ring-2 focus:ring-emerald-500 outline-none text-slate-700 shadow-inner scrollbar-thin" placeholder="Cole aqui..." />
+                    <textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-5 border-2 border-slate-100 rounded-2xl bg-slate-50 text-[11px] font-mono mb-6 focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 shadow-inner scrollbar-thin" placeholder="Cole aqui..." />
                     <button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="w-full py-4 bg-emerald-500 text-white font-black uppercase tracking-widest text-[11px] rounded-xl shadow-lg flex items-center justify-center gap-3 transition-all hover:bg-emerald-600 disabled:opacity-50">{isProcessingImport ? <Loader2 size={18} className="animate-spin" /> : <span>Processar Importação</span>}</button>
                 </div>
              </div>
@@ -611,18 +608,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       )}
 
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-md z-[200] flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in">
             <div className="bg-primary-600 text-white p-6 flex justify-between items-center"><h3 className="font-black uppercase tracking-widest text-xs flex items-center gap-3"><Plus size={20} /> Novo Registro</h3><button onClick={() => setIsModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg transition-all"><X size={20} /></button></div>
             <form onSubmit={handleSubmit} className="p-8 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Data</label><input type="date" required value={formData.data} onChange={e => setFormData({...formData, data: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-700 text-[11px] font-bold outline-none focus:border-primary-600 transition-all"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Data</label><input type="date" required value={formData.data} onChange={e => setFormData({...formData, data: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none focus:border-primary-600 transition-all"/></div>
                     <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rota</label><input type="text" required value={formData.rota} onChange={e => setFormData({...formData, rota: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-[11px] font-black text-primary-600 outline-none focus:border-primary-600 transition-all"/></div>
                 </div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operação</label><select required value={formData.operacao} onChange={e => setFormData({...formData, operacao: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-[11px] font-black text-slate-600 outline-none focus:border-primary-600"><option value="">Selecione...</option>{userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}</select></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operação</label><select required value={formData.operacao} onChange={e => setFormData({...formData, operacao: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-[11px] font-black text-slate-700 outline-none focus:border-primary-600"><option value="">Selecione...</option>{userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}</select></div>
                 <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Motorista</label><input type="text" required value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-700 text-[11px] font-bold outline-none focus:border-primary-600 transition-all"/></div>
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Placa</label><input type="text" required value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-700 text-[11px] font-black outline-none focus:border-primary-600 transition-all"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Motorista</label><input type="text" required value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none focus:border-primary-600 transition-all"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Placa</label><input type="text" required value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-black outline-none focus:border-primary-600 transition-all"/></div>
                 </div>
                 <button type="submit" disabled={isSyncing} className="w-full py-4 bg-primary-600 hover:bg-primary-700 text-white font-black uppercase tracking-widest text-[11px] rounded-xl flex items-center justify-center gap-2 shadow-xl transition-all mt-4">{isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} SALVAR NO SHAREPOINT</button>
             </form>
