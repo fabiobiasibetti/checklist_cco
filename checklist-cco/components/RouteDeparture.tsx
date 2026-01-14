@@ -9,7 +9,7 @@ import {
   AlertTriangle, Link, CheckCircle2, ChevronDown, 
   Filter, Search, Check, CheckSquare, Square,
   BarChart3, PieChart as PieChartIcon, TrendingUp,
-  Activity, EyeOff
+  Activity, EyeOff, ChevronRight
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 
@@ -18,6 +18,51 @@ interface RouteConfig {
     email: string;
     tolerancia: string;
 }
+
+const MOTIVOS = [
+  'Fábrica',
+  'Logística',
+  'Mão de obra',
+  'Manutenção',
+  'Divergência de Roteirização',
+  'Solicitado pelo Cliente',
+  'Infraestrutura'
+];
+
+const OBSERVATION_TEMPLATES: Record<string, string[]> = {
+  'Fábrica': [
+    "Atraso na descarga | Entrada **:**h - Saída **:**h"
+  ],
+  'Logística': [
+    "Atraso no lavador | Chegada da rota anterior às **:**h - Entrada na fábrica às **:**h",
+    "Motorista adiantou a rota devido à desvios",
+    "Atraso na rota anterior (nome da rota)",
+    "Atraso na rota anterior | Chegada no lavador **:**h - Entrada na fábrica às **:**h",
+    "Falta de material de coleta para realizar a rota"
+  ],
+  'Mão de obra': [
+    "Atraso do motorista",
+    "Adiantamento do motorista",
+    "A rota iniciou atrasada devido à interjornada do motorista | Atrasou na rota anterior devido à",
+    "Troca do motorista previsto devido à saúde"
+  ],
+  'Manutenção': [
+    "Precisou realizar a troca de pneus | Início **:**h - Término **:**h",
+    "Troca de mola | Início **:**h - Término **:**h",
+    "Manutenção na parte elétrica | Início **:**h - Término **:**h",
+    "Manutenção nos freios | Início **:**h - Término **:**h",
+    "Manutenção na bomba de carregamento de leite | Início **:**h - Término **:**h"
+  ],
+  'Divergência de Roteirização': [
+    "Horário de saída da rota não atende os produtores",
+    "Horário de saída da rota precisa ser alterado devido à entrada de produtores"
+  ],
+  'Solicitado pelo Cliente': [
+    "Rota saiu adiantada para realizar socorro",
+    "Cliente solicitou para a rota sair adiantada"
+  ],
+  'Infraestrutura': []
+};
 
 const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [routes, setRoutes] = useState<RouteDeparture[]>([]);
@@ -37,6 +82,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [isAvisoVisible, setIsAvisoVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, id: string } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(0.9);
+  const [activeObsId, setActiveObsId] = useState<string | null>(null);
 
   // Filter States
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
@@ -52,8 +98,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     motorista: 230,
     placa: 100,
     saida: 95,
-    motivo: 160,
-    observacao: 280,
+    motivo: 170,
+    observacao: 320,
     geral: 70,
     aviso: 70,
     operacao: 140,
@@ -64,6 +110,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const obsDropdownRef = useRef<HTMLDivElement>(null);
 
   const getAccessToken = () => (window as any).__access_token;
 
@@ -145,6 +192,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             setActiveFilterCol(null);
         }
         if (contextMenu) setContextMenu(null);
+        if (obsDropdownRef.current && !obsDropdownRef.current.contains(e.target as Node)) {
+          setActiveObsId(null);
+        }
     };
 
     const handleWheel = (e: WheelEvent) => {
@@ -282,84 +332,19 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return { total, okCount, delayedCount, earlyCount, statusPie, reasonData };
   }, [filteredRoutes]);
 
-  // Fix: Explicitly handle potential undefined to fix 'unknown' type errors
-  const handleImport = async () => {
-    if (!importText.trim()) return;
-    setIsProcessingImport(true);
-    try {
-        const parsed = parseRouteDeparturesManual(importText);
-        if (parsed.length === 0) throw new Error("Nenhum dado válido identificado.");
-        const token = getAccessToken();
-        for (const item of parsed) {
-            const rotaStr = (item.rota || "").trim();
-            const mapping = routeMappings.find(m => m.Title.trim() === rotaStr);
-            const op = (mapping?.OPERACAO || "").toUpperCase().trim();
-            const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === op);
-            
-            const inicioStr = item.inicio || '00:00:00';
-            const saidaStr = item.saida || '00:00:00';
-            const toleranceStr = config?.tolerancia || "00:00:00";
-            
-            const { gap, status } = calculateGap(inicioStr, saidaStr, toleranceStr);
-            
-            await SharePointService.updateDeparture(token!, { 
-              ...item, 
-              id: '', 
-              statusOp: status, 
-              tempo: gap, 
-              createdAt: new Date().toISOString() 
-            } as RouteDeparture);
-        }
-        await loadData();
-        setIsImportModalOpen(false);
-    } catch (e: any) { alert(e.message); } finally { setIsProcessingImport(false); }
-  };
-
-  const removeRow = async (id: string) => {
-    const token = getAccessToken();
-    if (!token) return;
-    if (confirm('Excluir registro permanentemente?')) {
-      setIsSyncing(true);
-      try {
-        await SharePointService.deleteDeparture(token, id);
-        setRoutes(routes.filter(r => r.id !== id));
-      } catch (err: any) { alert(err.message); } finally { setIsSyncing(false); }
-    }
-  };
-
-  const getAlertStyles = (route: RouteDeparture) => {
-    const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
-    const tolerance = String(config?.tolerancia || "00:00:00");
-    const { isOutOfTolerance } = calculateGap(String(route.inicio || "00:00:00"), String(route.saida || "00:00:00"), tolerance);
-    if (route.saida !== '00:00:00' && isOutOfTolerance) return "border-l-4 border-[#F75A68] bg-[#F75A68]/10";
-    const toleranceSec = timeToSeconds(tolerance);
-    const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
-    const scheduledStartSec = timeToSeconds(String(route.inicio || "00:00:00"));
-    if (route.saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) return "border-l-4 border-[#FF9000] bg-[#FF9000]/10";
-    return "border-l-4 border-transparent";
-  };
-
-  // Fix: Missing handleLinkPending function implementation
   const handleLinkPending = async () => {
     const token = getAccessToken();
     if (!token) return;
     setIsSyncing(true);
     try {
         const promises = pendingItems.map(async (item) => {
+            // Fix: Asserting types to satisfy compiler after truthy checks, resolving 'unknown' to 'string' mismatch
             if (item.operacao && item.rota) {
-                const existingMapping = routeMappings.find(m => m.Title === item.rota);
-                if (!existingMapping) {
-                    await SharePointService.addRouteOperationMapping(token, item.rota, item.operacao);
-                }
-                
-                const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === item.operacao!.toUpperCase().trim());
+                const existingMapping = routeMappings.find(m => m.Title === (item.rota as string));
+                if (!existingMapping) await SharePointService.addRouteOperationMapping(token, item.rota as string, item.operacao as string);
+                const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (item.operacao as string).toUpperCase().trim());
                 const { gap, status } = calculateGap(item.inicio || '00:00:00', item.saida || '00:00:00', config?.tolerancia || "00:00:00");
-                
-                return SharePointService.updateDeparture(token, {
-                    ...item,
-                    statusOp: status,
-                    tempo: gap
-                } as RouteDeparture);
+                return SharePointService.updateDeparture(token, { ...item, statusOp: status, tempo: gap } as RouteDeparture);
             }
             return Promise.resolve();
         });
@@ -367,53 +352,23 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         await loadData();
         setIsLinkModalOpen(false);
         setPendingItems([]);
-    } catch (e: any) {
-        alert("Erro ao gravar vínculos: " + e.message);
-    } finally {
-        setIsSyncing(false);
-    }
+    } catch (e: any) { alert("Erro ao gravar vínculos: " + e.message); } finally { setIsSyncing(false); }
   };
 
-  // Fix: Missing handleSubmit function implementation
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const token = getAccessToken();
     if (!token) return;
-
     setIsSyncing(true);
     try {
         const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (formData.operacao || "").toUpperCase().trim());
         const { gap, status } = calculateGap(formData.inicio || '00:00:00', formData.saida || '00:00:00', config?.tolerancia || "00:00:00");
-        
-        const newRoute: RouteDeparture = {
-            ...formData,
-            id: '',
-            statusOp: status,
-            tempo: gap,
-            createdAt: new Date().toISOString(),
-        } as RouteDeparture;
-
+        const newRoute: RouteDeparture = { ...formData, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
         await SharePointService.updateDeparture(token, newRoute);
         await loadData();
         setIsModalOpen(false);
-        setFormData({
-            rota: '',
-            data: new Date().toISOString().split('T')[0],
-            inicio: '00:00:00',
-            saida: '00:00:00',
-            motorista: '',
-            placa: '',
-            operacao: '',
-            motivo: '',
-            observacao: '',
-            statusGeral: 'OK',
-            aviso: 'NÃO',
-        });
-    } catch (err: any) {
-        alert(err.message);
-    } finally {
-        setIsSyncing(false);
-    }
+        setFormData({ rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', operacao: '', motivo: '', observacao: '', statusGeral: 'OK', aviso: 'NÃO' });
+    } catch (err: any) { alert(err.message); } finally { setIsSyncing(false); }
   };
 
   const FilterDropdown = ({ col }: { col: string }) => {
@@ -434,7 +389,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 {values.map(v => (
                     <div key={v} onClick={() => toggleValue(v)} className="flex items-center gap-2 p-2 hover:bg-slate-800 rounded-lg cursor-pointer transition-all">
                         {selected.includes(v) ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} className="text-slate-600" />}
-                        <span className="text-[10px] font-bold uppercase truncate text-slate-300">{v || "(VAZIO)"}</span>
+                        <span className="text-[10px] font-bold uppercase truncate text-slate-100">{v || "(VAZIO)"}</span>
                     </div>
                 ))}
             </div>
@@ -530,7 +485,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   const alertClasses = getAlertStyles(route);
                   const isEven = idx % 2 === 0;
                   const rowBg = isEven ? 'bg-[#121214]' : 'bg-[#18181b]';
-                  const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-bold text-white uppercase tracking-tight transition-all focus:bg-blue-500/10 placeholder-slate-600";
+                  const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-bold text-white uppercase tracking-tight transition-all focus:bg-blue-500/10 placeholder-slate-400";
+
+                  // Dynamic Status logic
+                  const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
+                  const tolerance = String(config?.tolerancia || "00:00:00");
+                  const toleranceSec = timeToSeconds(tolerance);
+                  const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
+                  const scheduledStartSec = timeToSeconds(String(route.inicio || "00:00:00"));
+                  let displayStatus = route.statusOp;
+                  if (route.saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) {
+                      displayStatus = 'Atrasado';
+                  }
 
                   return (
                     <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all h-9 hover:bg-blue-900/10`}>
@@ -544,13 +510,58 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} className={`${textClass} font-mono text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]">
                         <div className="flex items-center justify-center h-full px-2">
-                            <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-[#1e1e24] border border-slate-700 rounded px-1 py-0.5 text-[10px] font-black uppercase text-white outline-none appearance-none text-center">
+                            <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-[#1e1e24] border border-slate-700 rounded px-1 py-0.5 text-[10px] font-black uppercase text-white outline-none appearance-none text-center focus:border-blue-500">
                                 <option value="">SELECIONE...</option>
-                                {['Manutenção', 'Mão de obra', 'Atraso coleta', 'Atraso carregamento', 'Fábrica', 'Infraestrutura', 'Logística', 'Outros'].map(m => (<option key={m} value={m}>{m.toUpperCase()}</option>))}
+                                {MOTIVOS.map(m => (<option key={m} value={m}>{m.toUpperCase()}</option>))}
                             </select>
                         </div>
                       </td>
-                      <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.observacao} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} className={`${textClass} italic font-normal text-slate-200 text-left truncate`} placeholder="..." /></td>
+                      <td className="p-0 border-r border-[#1e1e24] relative group/obs">
+                        <div className="flex items-center w-full h-full relative">
+                          <input 
+                            type="text" 
+                            value={route.observacao} 
+                            onFocus={() => setActiveObsId(route.id)}
+                            onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} 
+                            className={`${textClass} italic font-normal text-slate-100 text-left truncate pr-8`} 
+                            placeholder="Descreva..." 
+                          />
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-blue-400 transition-colors opacity-30 group-hover/obs:opacity-100"
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                        </div>
+                        {activeObsId === route.id && (
+                          <div 
+                            ref={obsDropdownRef}
+                            className="absolute top-full left-0 w-full z-[110] bg-[#1e1e24] border border-slate-700 rounded-xl shadow-[0_15px_40px_rgba(0,0,0,0.6)] overflow-hidden animate-in fade-in slide-in-from-top-1"
+                          >
+                            <div className="p-2 border-b border-slate-700 flex items-center justify-between">
+                              <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Modelos Sugeridos: {route.motivo || 'Geral'}</span>
+                              <X size={10} className="text-slate-500 cursor-pointer" onClick={() => setActiveObsId(null)} />
+                            </div>
+                            <div className="max-h-48 overflow-y-auto scrollbar-thin">
+                              {(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : Object.values(OBSERVATION_TEMPLATES).flat())
+                                .filter(t => t.toLowerCase().includes(route.observacao.toLowerCase()))
+                                .map((template, tIdx) => (
+                                  <div 
+                                    key={tIdx} 
+                                    onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }}
+                                    className="p-2 text-[10px] text-slate-300 hover:bg-blue-600 hover:text-white cursor-pointer transition-all border-b border-slate-800 last:border-0 flex items-center gap-2"
+                                  >
+                                    <ChevronRight size={10} className="shrink-0" />
+                                    <span className="truncate">{template}</span>
+                                  </div>
+                                ))}
+                              {route.motivo && (!OBSERVATION_TEMPLATES[route.motivo] || OBSERVATION_TEMPLATES[route.motivo].length === 0) && (
+                                <div className="p-4 text-center text-[10px] text-slate-500 italic">Nenhum template para este motivo.</div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </td>
                       <td className="p-0 border-r border-[#1e1e24]"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
                       
                       {isAvisoVisible ? (
@@ -561,7 +572,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                       <td className="p-1 border-r border-[#1e1e24] text-center font-black uppercase text-[9px] text-slate-300">{route.operacao || "---"}</td>
                       <td className="p-1 border-r border-[#1e1e24] text-center">
-                        <span className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-red-900/30 border-red-800 text-red-400'}`}>{route.statusOp}</span>
+                        <span className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black border ${displayStatus === 'OK' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-red-900/30 border-red-800 text-red-400'}`}>{displayStatus}</span>
                       </td>
                       <td className="p-1 border-r border-[#1e1e24] text-center font-mono font-bold text-[10px] text-white">{route.tempo}</td>
                     </tr>
