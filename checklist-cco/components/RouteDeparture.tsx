@@ -7,8 +7,7 @@ import {
   Plus, Trash2, Save, Clock, X, Upload, 
   Loader2, RefreshCw, ShieldCheck,
   AlertTriangle, Link, CheckCircle2, ChevronDown, 
-  Filter, Search, Check, CheckSquare, Square,
-  Sparkles
+  Filter, Search, Check, CheckSquare, Square
 } from 'lucide-react';
 
 interface RouteConfig {
@@ -31,7 +30,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [currentTime, setCurrentTime] = useState(new Date());
   
   // Zoom State
-  const [zoomLevel, setZoomLevel] = useState(0.9); // Começa um pouco menor para caber mais dados
+  const [zoomLevel, setZoomLevel] = useState(0.9);
 
   // Filter States
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
@@ -76,6 +75,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     statusGeral: 'OK',
     aviso: 'NÃO',
   });
+
+  const clearAllFilters = () => {
+    setColFilters({});
+    setSelectedFilters({});
+    setActiveFilterCol(null);
+  };
 
   const loadData = async () => {
     const token = getAccessToken();
@@ -147,9 +152,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         }
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+        // Atalho CTRL + SHIFT + L para limpar filtros
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
+            e.preventDefault();
+            clearAllFilters();
+        }
+    };
+
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     window.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
     
     const container = tableContainerRef.current;
     if (container) {
@@ -161,6 +175,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
       if (container) container.removeEventListener('wheel', handleWheel);
     };
   }, [currentUser]);
@@ -320,7 +335,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         setIsImportModalOpen(false);
         setImportText('');
     } catch (error: any) {
-        alert(`Erro na importação: ${error.message}`);
+        // Fix: Use Error handling to satisfy TS linter for unknown catch variables
+        alert(`Erro na importação: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
         setIsProcessingImport(false);
     }
@@ -356,7 +372,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         setIsLinkModalOpen(false);
         setPendingItems([]);
     } catch (err: any) {
-        alert("Erro ao salvar: " + err.message);
+        // Fix: Use Error handling to satisfy TS linter for unknown catch variables
+        alert("Erro ao salvar: " + (err instanceof Error ? err.message : String(err)));
     } finally {
         setIsProcessingImport(false);
     }
@@ -385,7 +402,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             motorista: '', placa: '', operacao: '', motivo: '', observacao: '', statusGeral: 'OK', aviso: 'NÃO',
         });
     } catch (err: any) {
-        alert("Erro ao salvar: " + err.message);
+        // Fix: Use Error handling to satisfy TS linter for unknown catch variables
+        alert("Erro ao salvar: " + (err instanceof Error ? err.message : String(err)));
     } finally {
         setIsSyncing(false);
     }
@@ -400,7 +418,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         await SharePointService.deleteDeparture(token, id);
         setRoutes(routes.filter(r => r.id !== id));
       } catch (err: any) {
-          alert(err.message);
+          // Fix: Use Error handling to satisfy TS linter for unknown catch variables
+          alert(err instanceof Error ? err.message : String(err));
       } finally {
           setIsSyncing(false);
       }
@@ -409,17 +428,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const getAlertStyles = (route: RouteDeparture) => {
     const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === route.operacao.toUpperCase().trim());
-    // Fix: Explicitly handle potential undefined/unknown by providing a fallback string and casting.
     const tolerance = (config?.tolerancia as string) || "00:00:00";
     const { isOutOfTolerance } = calculateGap(route.inicio, route.saida, tolerance);
     
-    // Crítico (Vermelho) se estiver fora da tolerância e com saída registrada
     if (route.saida !== '00:00:00' && isOutOfTolerance) {
         return "border-l-4 border-[#F75A68] bg-[#F75A68]/10";
     }
     
-    // Alerta (Laranja) se ainda não saiu e passou do horário planejado + tolerância
-    // Fix: Use the same tolerance string constant or variable to ensure type safety.
     const toleranceSec = timeToSeconds(tolerance);
     const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
     const scheduledStartSec = timeToSeconds(route.inicio);
@@ -445,7 +460,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     };
 
     return (
-        <div ref={filterRef} className="absolute top-10 left-0 z-50 bg-[#1e1e24] border border-slate-700 shadow-2xl rounded-xl w-64 p-3 text-slate-200 animate-in fade-in slide-in-from-top-2">
+        <div ref={filterRef} className="absolute top-10 left-0 z-[60] bg-[#1e1e24] border border-slate-700 shadow-2xl rounded-xl w-64 p-3 text-slate-200 animate-in fade-in slide-in-from-top-2">
             <div className="flex items-center gap-2 mb-3 p-2 bg-[#121214] rounded-lg border border-slate-800">
                 <Search size={14} className="text-slate-500" />
                 <input 
@@ -504,7 +519,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
         <div className="flex gap-2 items-center">
           <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-[#121214] border border-slate-800 rounded-lg text-[9px] text-slate-500 font-bold uppercase mr-4">
-              Zoom: {Math.round(zoomLevel * 100)}% <span className="opacity-50 text-[8px]">(Ctrl + Scroll)</span>
+              Zoom: {Math.round(zoomLevel * 100)}% <span className="opacity-50 text-[8px]">(Ctrl+Shift+L p/ limpar filtros)</span>
           </div>
           <button onClick={loadData} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-800">
               <RefreshCw size={18} />
@@ -564,7 +579,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       </th>
                     );
                   })}
-                  <th className="p-2 w-10 sticky right-0 bg-blue-700 border-l border-blue-600/50"></th>
+                  <th className="p-2 w-12 sticky right-0 bg-blue-700 border-l border-blue-600/50 z-[45] shadow-[-2px_0_4px_rgba(0,0,0,0.2)]"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/30">
@@ -655,7 +670,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                         </span>
                       </td>
                       <td className="p-1 border-r border-[#1e1e24] text-center font-mono font-bold text-[9px] text-[#8D8D99]">{route.tempo}</td>
-                      <td className="p-1 sticky right-0 bg-[#121214] group-hover:bg-[#18181b] transition-colors shadow-[-4px_0_12px_rgba(0,0,0,0.5)] text-center">
+                      <td className={`p-1 sticky right-0 z-30 transition-colors shadow-[-4px_0_12px_rgba(0,0,0,0.5)] text-center ${isEven ? 'bg-[#121214]' : 'bg-[#18181b]'} group-hover:bg-[#1e293b]`}>
                         <button onClick={() => removeRow(route.id)} className="text-slate-600 hover:text-red-400 p-1.5 transition-colors">
                           <Trash2 size={14} />
                         </button>
@@ -807,5 +822,17 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     </div>
   );
 };
+
+// Added missing Sparkles component used in the view
+const Sparkles = ({ size = 20, className = "" }) => (
+    <svg 
+        width={size} height={size} viewBox="0 0 24 24" fill="none" 
+        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" 
+        className={className}
+    >
+        <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
+        <path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/>
+    </svg>
+);
 
 export default RouteDepartureView;
