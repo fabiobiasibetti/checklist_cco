@@ -78,13 +78,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [importText, setImportText] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
   
-  // Customization States
   const [isAvisoVisible, setIsAvisoVisible] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, id: string } | null>(null);
   const [zoomLevel, setZoomLevel] = useState(0.9);
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
 
-  // Filter States
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
@@ -145,14 +143,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         SharePointService.getDepartures(token)
       ]);
       
-      setUserConfigs(configs);
-      setRouteMappings(mappings);
+      setUserConfigs(configs || []);
+      setRouteMappings(mappings || []);
 
-      const allowedOps = new Set(configs.map(c => c.operacao.toUpperCase().trim()));
+      const allowedOps = new Set(configs.map(c => (c.operacao || "").toUpperCase().trim()));
       const fixedData = spData.map(route => {
         if (!route.operacao || route.operacao === "") {
             const match = mappings.find(m => m.Title === route.rota);
-            if (match && allowedOps.has(match.OPERACAO.toUpperCase().trim())) {
+            if (match && allowedOps.has((match.OPERACAO || "").toUpperCase().trim())) {
                 return { ...route, operacao: match.OPERACAO.toUpperCase().trim() };
             }
         }
@@ -166,7 +164,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       }
 
       setRoutes(fixedData);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
     } finally {
       setIsLoading(false);
@@ -243,7 +241,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const formatTimeInput = (value: string): string => {
-    let clean = value.replace(/[^0-9:]/g, '');
+    let clean = (value || "").replace(/[^0-9:]/g, '');
     if (!clean) return '00:00:00';
     const parts = clean.split(':');
     let h = (parts[0] || '00').padStart(2, '0').substring(0, 2);
@@ -269,11 +267,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const calculateGap = (inicio: string, saida: string, toleranceStr: string = "00:00:00"): { gap: string, status: string, isOutOfTolerance: boolean } => {
-    if (!inicio || !saida || inicio === '00:00:00' || saida === '00:00:00') return { gap: 'OK', status: 'OK', isOutOfTolerance: false };
-    const startSec = timeToSeconds(inicio);
-    const endSec = timeToSeconds(saida);
+    const sInicio = inicio || '00:00:00';
+    const sSaida = saida || '00:00:00';
+    if (sInicio === '00:00:00' || sSaida === '00:00:00') return { gap: 'OK', status: 'OK', isOutOfTolerance: false };
+    const startSec = timeToSeconds(sInicio);
+    const endSec = timeToSeconds(sSaida);
     const diff = endSec - startSec;
-    const toleranceSec = timeToSeconds(toleranceStr);
+    const toleranceSec = timeToSeconds(toleranceStr || "00:00:00");
     const gapFormatted = secondsToTime(diff);
     const isOutOfTolerance = Math.abs(diff) > toleranceSec;
     const status = isOutOfTolerance ? (diff > 0 ? 'Atrasado' : 'Adiantado') : 'OK';
@@ -290,7 +290,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (field === 'inicio' || field === 'saida') finalValue = formatTimeInput(value);
 
     let updatedRoute = { ...route, [field]: finalValue };
-    const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === updatedRoute.operacao.toUpperCase().trim());
+    const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (updatedRoute.operacao || "").toUpperCase().trim());
     
     if (field === 'inicio' || field === 'saida' || field === 'operacao') {
         const { gap, status } = calculateGap(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00");
@@ -332,19 +332,75 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return { total, okCount, delayedCount, earlyCount, statusPie, reasonData };
   }, [filteredRoutes]);
 
+  const handleImport = async () => {
+    if (!importText.trim()) return;
+    setIsProcessingImport(true);
+    try {
+        const parsed = parseRouteDeparturesManual(importText);
+        if (parsed.length === 0) throw new Error("Nenhum dado válido identificado.");
+        const token = getAccessToken();
+        for (const item of parsed) {
+            const rotaStr = (item.rota || "").trim();
+            const mapping = routeMappings.find(m => (m.Title || "").trim() === rotaStr);
+            const op = (mapping?.OPERACAO || "").toUpperCase().trim();
+            const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === op);
+            
+            const inicioStr = item.inicio || '00:00:00';
+            const saidaStr = item.saida || '00:00:00';
+            const toleranceStr = config?.tolerancia || "00:00:00";
+            const { gap, status } = calculateGap(inicioStr, saidaStr, toleranceStr);
+            
+            await SharePointService.updateDeparture(token!, { ...item, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture);
+        }
+        await loadData();
+        setIsImportModalOpen(false);
+    } catch (e: any) { alert(e.message); } finally { setIsProcessingImport(false); }
+  };
+
+  const removeRow = async (id: string) => {
+    const token = getAccessToken();
+    if (!token) return;
+    if (confirm('Excluir registro permanentemente?')) {
+      setIsSyncing(true);
+      try {
+        await SharePointService.deleteDeparture(token, id);
+        setRoutes(routes.filter(r => r.id !== id));
+      } catch (err: any) { alert(err.message); } finally { setIsSyncing(false); }
+    }
+  };
+
+  const getAlertStyles = (route: RouteDeparture) => {
+    const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
+    const tolerance = String(config?.tolerancia || "00:00:00");
+    const inicio = String(route.inicio || "00:00:00");
+    const saida = String(route.saida || "00:00:00");
+    const { isOutOfTolerance } = calculateGap(inicio, saida, tolerance);
+    if (saida !== '00:00:00' && isOutOfTolerance) return "border-l-4 border-[#F75A68] bg-[#F75A68]/10";
+    const toleranceSec = timeToSeconds(tolerance);
+    const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
+    const scheduledStartSec = timeToSeconds(inicio);
+    if (saida === '00:00:00' && nowSec > (scheduledStartSec + toleranceSec)) return "border-l-4 border-[#FF9000] bg-[#FF9000]/10";
+    return "border-l-4 border-transparent";
+  };
+
   const handleLinkPending = async () => {
     const token = getAccessToken();
     if (!token) return;
     setIsSyncing(true);
     try {
         const promises = pendingItems.map(async (item) => {
-            // Fix: Asserting types to satisfy compiler after truthy checks, resolving 'unknown' to 'string' mismatch
             if (item.operacao && item.rota) {
                 const existingMapping = routeMappings.find(m => m.Title === (item.rota as string));
                 if (!existingMapping) await SharePointService.addRouteOperationMapping(token, item.rota as string, item.operacao as string);
-                const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (item.operacao as string).toUpperCase().trim());
-                const { gap, status } = calculateGap(item.inicio || '00:00:00', item.saida || '00:00:00', config?.tolerancia || "00:00:00");
-                return SharePointService.updateDeparture(token, { ...item, statusOp: status, tempo: gap } as RouteDeparture);
+                const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (item.operacao as string).toUpperCase().trim());
+                // Explicitly cast arguments to string to avoid "unknown" type assignment errors
+                const { gap, status } = calculateGap(
+                  String(item.inicio || '00:00:00'), 
+                  String(item.saida || '00:00:00'), 
+                  String(config?.tolerancia || "00:00:00")
+                );
+                // Ensure token is cast to string as required by SharePointService
+                return SharePointService.updateDeparture(String(token), { ...item, statusOp: status, tempo: gap } as RouteDeparture);
             }
             return Promise.resolve();
         });
@@ -361,7 +417,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!token) return;
     setIsSyncing(true);
     try {
-        const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (formData.operacao || "").toUpperCase().trim());
+        const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (formData.operacao || "").toUpperCase().trim());
         const { gap, status } = calculateGap(formData.inicio || '00:00:00', formData.saida || '00:00:00', config?.tolerancia || "00:00:00");
         const newRoute: RouteDeparture = { ...formData, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
         await SharePointService.updateDeparture(token, newRoute);
@@ -407,7 +463,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   return (
     <div className="flex flex-col h-full animate-fade-in bg-[#020617] p-4 overflow-hidden select-none">
-      {/* HEADER */}
       <div className="flex justify-between items-center mb-4 shrink-0 px-2">
         <div className="flex items-center gap-4">
           <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-2xl ring-4 ring-blue-600/10"><Clock size={20} /></div>
@@ -425,7 +480,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       </div>
 
-      {/* CONTEXT MENU */}
       {contextMenu && (
         <div className="fixed z-[300] bg-[#1e1e24] border border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100" style={{ top: contextMenu.y, left: contextMenu.x }}>
           <button onClick={() => removeRow(contextMenu.id)} className="w-full px-4 py-3 flex items-center gap-3 text-red-400 hover:bg-red-500/10 transition-colors font-black uppercase text-[10px]">
@@ -434,7 +488,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       )}
 
-      {/* DATA GRID */}
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-[#121214] rounded-xl border border-[#1e1e24] shadow-2xl relative scrollbar-thin overflow-x-auto">
         <div style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left', width: `${100 / zoomLevel}%` }}>
             <table className="border-collapse table-fixed w-full min-w-max">
@@ -487,8 +540,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   const rowBg = isEven ? 'bg-[#121214]' : 'bg-[#18181b]';
                   const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-bold text-white uppercase tracking-tight transition-all focus:bg-blue-500/10 placeholder-slate-400";
 
-                  // Dynamic Status logic
-                  const config = userConfigs.find(c => c.operacao.toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
+                  const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
                   const tolerance = String(config?.tolerancia || "00:00:00");
                   const toleranceSec = timeToSeconds(tolerance);
                   const nowSec = (currentTime.getHours() * 3600) + (currentTime.getMinutes() * 60) + currentTime.getSeconds();
@@ -544,7 +596,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             </div>
                             <div className="max-h-48 overflow-y-auto scrollbar-thin">
                               {(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : Object.values(OBSERVATION_TEMPLATES).flat())
-                                .filter(t => t.toLowerCase().includes(route.observacao.toLowerCase()))
+                                .filter(t => t.toLowerCase().includes((route.observacao || "").toLowerCase()))
                                 .map((template, tIdx) => (
                                   <div 
                                     key={tIdx} 
@@ -563,13 +615,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                         )}
                       </td>
                       <td className="p-0 border-r border-[#1e1e24]"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
-                      
                       {isAvisoVisible ? (
                         <td className="p-0 border-r border-[#1e1e24]"><select value={route.aviso} onChange={(e) => updateCell(route.id, 'aviso', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="SIM">SIM</option><option value="NÃO">NÃO</option></select></td>
                       ) : (
                         <td className="w-8 border-r border-[#1e1e24] bg-black/10"></td>
                       )}
-
                       <td className="p-1 border-r border-[#1e1e24] text-center font-black uppercase text-[9px] text-slate-300">{route.operacao || "---"}</td>
                       <td className="p-1 border-r border-[#1e1e24] text-center">
                         <span className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black border ${displayStatus === 'OK' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-red-900/30 border-red-800 text-red-400'}`}>{displayStatus}</span>
@@ -583,7 +633,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       </div>
 
-      {/* INDICATORS DASHBOARD MODAL */}
       {isStatsModalOpen && dashboardStats && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[200] flex items-center justify-center p-6">
             <div className="bg-[#121214] border border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in duration-300">
@@ -598,9 +647,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     <div className="grid grid-cols-4 gap-6">
                         {[
                             { label: 'Total Filtrado', value: dashboardStats.total, icon: Activity, color: 'text-white bg-slate-800' },
-                            { label: 'No Horário', value: `${Math.round((dashboardStats.okCount / dashboardStats.total) * 100)}%`, icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-900/20' },
-                            { label: 'Atrasadas', value: `${Math.round((dashboardStats.delayedCount / dashboardStats.total) * 100)}%`, icon: AlertTriangle, color: 'text-red-400 bg-red-900/20' },
-                            { label: 'Adiantadas', value: `${Math.round((dashboardStats.earlyCount / dashboardStats.total) * 100)}%`, icon: TrendingUp, color: 'text-blue-400 bg-blue-900/20' }
+                            { label: 'No Horário', value: `${Math.round((dashboardStats.okCount / (dashboardStats.total || 1)) * 100)}%`, icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-900/20' },
+                            { label: 'Atrasadas', value: `${Math.round((dashboardStats.delayedCount / (dashboardStats.total || 1)) * 100)}%`, icon: AlertTriangle, color: 'text-red-400 bg-red-900/20' },
+                            { label: 'Adiantadas', value: `${Math.round((dashboardStats.earlyCount / (dashboardStats.total || 1)) * 100)}%`, icon: TrendingUp, color: 'text-blue-400 bg-blue-900/20' }
                         ].map((stat, idx) => (
                             <div key={idx} className="p-6 rounded-[2rem] bg-[#18181b] border border-slate-800 flex flex-col gap-2 shadow-lg">
                                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${stat.color}`}><stat.icon size={20} /></div>
@@ -641,7 +690,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       )}
 
-      {/* MODALS (LINK, IMPORT, MANUAL) */}
       {isLinkModalOpen && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[250] flex items-center justify-center p-4">
             <div className="bg-[#121214] border border-slate-800 rounded-3xl shadow-2xl w-full max-w-lg flex flex-col overflow-hidden animate-in zoom-in duration-300">
@@ -655,7 +703,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     ))}
                 </div>
                 <div className="p-6 bg-[#18181b] border-t border-slate-800">
-                    <button onClick={handleLinkPending} className="w-full py-4 bg-blue-600 text-white font-black uppercase text-[11px] rounded-xl shadow-xl transition-all hover:bg-blue-700 disabled:opacity-50">Gravar Registros</button>
+                    <button onClick={handleLinkPending} disabled={isSyncing} className="w-full py-4 bg-blue-600 text-white font-black uppercase text-[11px] rounded-xl shadow-xl transition-all hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                        {isSyncing ? <Loader2 size={16} className="animate-spin" /> : "Gravar Registros"}
+                    </button>
                 </div>
             </div>
         </div>
