@@ -9,7 +9,7 @@ import {
   AlertTriangle, Link, CheckCircle2, ChevronDown, 
   Filter, Search, Check, CheckSquare, Square,
   BarChart3, PieChart as PieChartIcon, TrendingUp,
-  Activity, EyeOff, ChevronRight
+  Activity, EyeOff, ChevronRight, AlignLeft, Type as TypeIcon
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 
@@ -78,11 +78,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [importText, setImportText] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
   
-  const [isAvisoVisible, setIsAvisoVisible] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, id: string } | null>(null);
+  // Customization States
   const [zoomLevel, setZoomLevel] = useState(0.9);
   const [activeObsId, setActiveObsId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isTextWrapEnabled, setIsTextWrapEnabled] = useState(false);
 
+  // Filter States
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
@@ -90,6 +92,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [pendingItems, setPendingItems] = useState<Partial<RouteDeparture>[]>([]);
 
   const [colWidths, setColWidths] = useState<Record<string, number>>({
+    select: 35,
     rota: 140,
     data: 125,
     inicio: 95,
@@ -97,9 +100,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     placa: 100,
     saida: 95,
     motivo: 170,
-    observacao: 320,
+    observacao: 350,
     geral: 70,
-    aviso: 70,
     operacao: 140,
     status: 90,
     tempo: 90,
@@ -110,7 +112,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const obsDropdownRef = useRef<HTMLDivElement>(null);
 
-  const getAccessToken = () => (window as any).__access_token;
+  // Fix: Explicitly type getAccessToken to return string to avoid "unknown" type issues
+  const getAccessToken = (): string => (window as any).__access_token || '';
 
   const [formData, setFormData] = useState<Partial<RouteDeparture>>({
     rota: '',
@@ -137,6 +140,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!token) return;
     setIsLoading(true);
     try {
+      // Fix: token is now guaranteed string from getAccessToken
       const [configs, mappings, spData] = await Promise.all([
         SharePointService.getRouteConfigs(token, currentUser.email),
         SharePointService.getRouteOperationMappings(token),
@@ -171,6 +175,26 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     }
   };
 
+  const removeSelectedRows = async () => {
+    if (selectedIds.size === 0) return;
+    const token = getAccessToken();
+    if (!token) return;
+
+    if (confirm(`Deseja excluir permanentemente os ${selectedIds.size} registros selecionados?`)) {
+        setIsSyncing(true);
+        try {
+            const idsToDelete = Array.from(selectedIds);
+            await Promise.all(idsToDelete.map(id => SharePointService.deleteDeparture(token, id)));
+            setRoutes(prev => prev.filter(r => !selectedIds.has(r.id)));
+            setSelectedIds(new Set());
+        } catch (err: any) {
+            alert("Erro ao excluir: " + err.message);
+        } finally {
+            setIsSyncing(false);
+        }
+    }
+  };
+
   useEffect(() => {
     loadData();
     const timer = setInterval(() => setCurrentTime(new Date()), 10000);
@@ -178,7 +202,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const handleMouseMove = (e: MouseEvent) => {
       if (resizingRef.current) {
         const { col, startX, startWidth } = resizingRef.current;
-        const newWidth = Math.max(40, startWidth + (e.clientX - startX));
+        const newWidth = Math.max(10, startWidth + (e.clientX - startX));
         setColWidths(prev => ({ ...prev, [col]: newWidth }));
       }
     };
@@ -189,7 +213,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
             setActiveFilterCol(null);
         }
-        if (contextMenu) setContextMenu(null);
         if (obsDropdownRef.current && !obsDropdownRef.current.contains(e.target as Node)) {
           setActiveObsId(null);
         }
@@ -207,6 +230,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
             e.preventDefault();
             clearAllFilters();
+        }
+        if (e.key === 'Delete' && selectedIds.size > 0) {
+            const target = e.target as HTMLElement;
+            if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') {
+                removeSelectedRows();
+            }
         }
     };
 
@@ -228,12 +257,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       window.removeEventListener('keydown', handleKeyDown);
       if (container) container.removeEventListener('wheel', handleWheel);
     };
-  }, [currentUser, contextMenu]);
-
-  const handleContextMenu = (e: React.MouseEvent, id: string) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, id });
-  };
+  }, [currentUser, selectedIds]);
 
   const startResize = (e: React.MouseEvent, col: string) => {
     e.preventDefault();
@@ -350,23 +374,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             const toleranceStr = config?.tolerancia || "00:00:00";
             const { gap, status } = calculateGap(inicioStr, saidaStr, toleranceStr);
             
-            await SharePointService.updateDeparture(token!, { ...item, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture);
+            // Fix: token is string
+            await SharePointService.updateDeparture(token, { ...item, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture);
         }
         await loadData();
         setIsImportModalOpen(false);
     } catch (e: any) { alert(e.message); } finally { setIsProcessingImport(false); }
-  };
-
-  const removeRow = async (id: string) => {
-    const token = getAccessToken();
-    if (!token) return;
-    if (confirm('Excluir registro permanentemente?')) {
-      setIsSyncing(true);
-      try {
-        await SharePointService.deleteDeparture(token, id);
-        setRoutes(routes.filter(r => r.id !== id));
-      } catch (err: any) { alert(err.message); } finally { setIsSyncing(false); }
-    }
   };
 
   const getAlertStyles = (route: RouteDeparture) => {
@@ -391,16 +404,16 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         const promises = pendingItems.map(async (item) => {
             if (item.operacao && item.rota) {
                 const existingMapping = routeMappings.find(m => m.Title === (item.rota as string));
+                // Fix: token is guaranteed string here
                 if (!existingMapping) await SharePointService.addRouteOperationMapping(token, item.rota as string, item.operacao as string);
                 const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (item.operacao as string).toUpperCase().trim());
-                // Explicitly cast arguments to string to avoid "unknown" type assignment errors
                 const { gap, status } = calculateGap(
                   String(item.inicio || '00:00:00'), 
                   String(item.saida || '00:00:00'), 
                   String(config?.tolerancia || "00:00:00")
                 );
-                // Ensure token is cast to string as required by SharePointService
-                return SharePointService.updateDeparture(String(token), { ...item, statusOp: status, tempo: gap } as RouteDeparture);
+                // Fix: Redundant String() conversion removed, token is already string
+                return SharePointService.updateDeparture(token, { ...item, statusOp: status, tempo: gap } as RouteDeparture);
             }
             return Promise.resolve();
         });
@@ -420,11 +433,19 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (formData.operacao || "").toUpperCase().trim());
         const { gap, status } = calculateGap(formData.inicio || '00:00:00', formData.saida || '00:00:00', config?.tolerancia || "00:00:00");
         const newRoute: RouteDeparture = { ...formData, id: '', statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+        // Fix: token is string
         await SharePointService.updateDeparture(token, newRoute);
         await loadData();
         setIsModalOpen(false);
         setFormData({ rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', operacao: '', motivo: '', observacao: '', statusGeral: 'OK', aviso: 'NÃO' });
     } catch (err: any) { alert(err.message); } finally { setIsSyncing(false); }
+  };
+
+  const toggleSelection = (id: string) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
+    setSelectedIds(newSelected);
   };
 
   const FilterDropdown = ({ col }: { col: string }) => {
@@ -472,6 +493,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           </div>
         </div>
         <div className="flex gap-2 items-center">
+          <button 
+            onClick={() => setIsTextWrapEnabled(!isTextWrapEnabled)} 
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-black border uppercase text-[9px] tracking-widest transition-all shadow-lg ${isTextWrapEnabled ? 'bg-blue-600 text-white border-blue-500' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'}`}
+          >
+            <AlignLeft size={16} /> Quebra de Linha
+          </button>
           <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-200 rounded-lg hover:bg-slate-700 font-black border border-slate-700 uppercase text-[9px] tracking-widest transition-all mr-2 shadow-lg"><BarChart3 size={16} /> Indicadores</button>
           <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-[#121214] border border-slate-800 rounded-lg text-[9px] text-slate-300 font-bold uppercase mr-4">Zoom: {Math.round(zoomLevel * 100)}%</div>
           <button onClick={loadData} className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-800"><RefreshCw size={18} /></button>
@@ -480,20 +507,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       </div>
 
-      {contextMenu && (
-        <div className="fixed z-[300] bg-[#1e1e24] border border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100" style={{ top: contextMenu.y, left: contextMenu.x }}>
-          <button onClick={() => removeRow(contextMenu.id)} className="w-full px-4 py-3 flex items-center gap-3 text-red-400 hover:bg-red-500/10 transition-colors font-black uppercase text-[10px]">
-            <Trash2 size={16} /> Excluir Registro
-          </button>
-        </div>
-      )}
-
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-[#121214] rounded-xl border border-[#1e1e24] shadow-2xl relative scrollbar-thin overflow-x-auto">
         <div style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left', width: `${100 / zoomLevel}%` }}>
             <table className="border-collapse table-fixed w-full min-w-max">
               <thead className="sticky top-0 z-50 bg-blue-700 text-white shadow-lg">
                 <tr className="h-10">
                   {[
+                    { id: 'select', label: '' },
                     { id: 'rota', label: 'ROTA' },
                     { id: 'data', label: 'DATA' },
                     { id: 'inicio', label: 'INÍCIO' },
@@ -503,27 +523,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     { id: 'motivo', label: 'MOTIVO' },
                     { id: 'observacao', label: 'OBSERVAÇÃO' },
                     { id: 'geral', label: 'GERAL' },
-                    { id: 'aviso', label: 'AV' },
                     { id: 'operacao', label: 'OPERAÇÃO' },
                     { id: 'status', label: 'STATUS' },
                     { id: 'tempo', label: 'TEMPO' }
                   ].map(col => {
-                    const isAviso = col.id === 'aviso';
-                    const hasFilter = !!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0;
-                    if (isAviso && !isAvisoVisible) {
-                        return (
-                          <th key={col.id} className="w-8 border-r border-blue-600/50 bg-blue-800 flex items-center justify-center cursor-pointer" onClick={() => setIsAvisoVisible(true)} title="Expandir Aviso">
-                            <ChevronDown size={12} className="-rotate-90 text-white/50" />
-                          </th>
-                        );
+                    if (col.id === 'select') {
+                        return <th key={col.id} style={{ width: colWidths.select }} className="border-r border-blue-600/50 bg-blue-800/50"></th>;
                     }
+                    const hasFilter = !!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0;
                     return (
                       <th key={col.id} style={{ width: colWidths[col.id] }} className="relative p-1 border-r border-blue-600/50 text-[9px] font-black uppercase tracking-widest text-left select-none group">
                         <div className="flex items-center justify-between px-1.5 h-full">
-                          <span className="flex items-center gap-1.5">
-                            {col.label}
-                            {isAviso && <button onClick={(e) => {e.stopPropagation(); setIsAvisoVisible(false);}} className="p-0.5 hover:bg-white/20 rounded"><EyeOff size={10}/></button>}
-                          </span>
+                          <span className="flex items-center gap-1.5">{col.label}</span>
                           <button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded transition-all ${hasFilter ? 'text-yellow-400 bg-white/10' : 'text-white/40 hover:bg-white/10'}`}><Filter size={10} fill={hasFilter ? 'currentColor' : 'none'} /></button>
                         </div>
                         {activeFilterCol === col.id && <FilterDropdown col={col.id} />}
@@ -536,9 +547,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               <tbody className="divide-y divide-slate-800/30">
                 {filteredRoutes.map((route, idx) => {
                   const alertClasses = getAlertStyles(route);
+                  const isSelected = selectedIds.has(route.id);
                   const isEven = idx % 2 === 0;
-                  const rowBg = isEven ? 'bg-[#121214]' : 'bg-[#18181b]';
+                  const rowBg = isSelected ? 'bg-blue-600/20' : (isEven ? 'bg-[#121214]' : 'bg-[#18181b]');
                   const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-bold text-white uppercase tracking-tight transition-all focus:bg-blue-500/10 placeholder-slate-400";
+                  const obsClass = `w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-100 transition-all focus:bg-blue-500/10 placeholder-slate-400 ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate'}`;
 
                   const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
                   const tolerance = String(config?.tolerancia || "00:00:00");
@@ -551,75 +564,66 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   }
 
                   return (
-                    <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all h-9 hover:bg-blue-900/10`}>
-                      <td className="p-0 border-r border-[#1e1e24]" onContextMenu={(e) => handleContextMenu(e, route.id)}>
-                        <input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${textClass} text-left font-black text-blue-400 cursor-help`} title="Clique direito p/ opções" />
-                      </td>
+                    <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all ${isTextWrapEnabled ? 'min-h-[2.25rem]' : 'h-9'} hover:bg-blue-900/10`}>
+                      <td 
+                        className={`p-0 border-r border-[#1e1e24] cursor-pointer transition-colors ${isSelected ? 'bg-blue-500' : 'hover:bg-slate-700'}`} 
+                        onClick={() => toggleSelection(route.id)}
+                      ></td>
+                      <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${textClass} text-left font-black text-blue-400`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className={`${textClass} font-mono text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id, 'inicio', e.target.value)} className={`${textClass} font-mono text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value.toUpperCase())} className={`${textClass} text-left text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value.toUpperCase())} className={`${textClass} font-mono tracking-widest text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]"><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} className={`${textClass} font-mono text-center text-white`} /></td>
                       <td className="p-0 border-r border-[#1e1e24]">
-                        <div className="flex items-center justify-center h-full px-2">
-                            <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-[#1e1e24] border border-slate-700 rounded px-1 py-0.5 text-[10px] font-black uppercase text-white outline-none appearance-none text-center focus:border-blue-500">
-                                <option value="">SELECIONE...</option>
-                                {MOTIVOS.map(m => (<option key={m} value={m}>{m.toUpperCase()}</option>))}
-                            </select>
-                        </div>
+                        {displayStatus !== 'OK' ? (
+                          <div className="flex items-center justify-center h-full px-2">
+                              <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-[#1e1e24] border border-slate-700 rounded px-1 py-0.5 text-[10px] font-black uppercase text-white outline-none appearance-none text-center focus:border-blue-500">
+                                  <option value="">SELECIONE...</option>
+                                  {MOTIVOS.map(m => (<option key={m} value={m}>{m.toUpperCase()}</option>))}
+                              </select>
+                          </div>
+                        ) : null}
                       </td>
                       <td className="p-0 border-r border-[#1e1e24] relative group/obs">
-                        <div className="flex items-center w-full h-full relative">
-                          <input 
-                            type="text" 
-                            value={route.observacao} 
-                            onFocus={() => setActiveObsId(route.id)}
-                            onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} 
-                            className={`${textClass} italic font-normal text-slate-100 text-left truncate pr-8`} 
-                            placeholder="Descreva..." 
-                          />
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-blue-400 transition-colors opacity-30 group-hover/obs:opacity-100"
-                          >
-                            <ChevronDown size={12} />
-                          </button>
-                        </div>
+                        {displayStatus !== 'OK' ? (
+                          <div className="flex items-start w-full h-full relative">
+                            <textarea 
+                              rows={isTextWrapEnabled ? undefined : 1}
+                              value={route.observacao} 
+                              onFocus={() => setActiveObsId(route.id)}
+                              onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} 
+                              className={`${obsClass} pr-8 resize-none`} 
+                              placeholder="Descreva..." 
+                            />
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }}
+                              className="absolute right-2 top-2 p-0.5 text-slate-500 hover:text-blue-400 transition-colors opacity-30 group-hover/obs:opacity-100"
+                            >
+                              <ChevronDown size={12} />
+                            </button>
+                          </div>
+                        ) : null}
                         {activeObsId === route.id && (
-                          <div 
-                            ref={obsDropdownRef}
-                            className="absolute top-full left-0 w-full z-[110] bg-[#1e1e24] border border-slate-700 rounded-xl shadow-[0_15px_40px_rgba(0,0,0,0.6)] overflow-hidden animate-in fade-in slide-in-from-top-1"
-                          >
+                          <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-[#1e1e24] border border-slate-700 rounded-xl shadow-[0_15px_40px_rgba(0,0,0,0.6)] overflow-hidden animate-in fade-in slide-in-from-top-1">
                             <div className="p-2 border-b border-slate-700 flex items-center justify-between">
-                              <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Modelos Sugeridos: {route.motivo || 'Geral'}</span>
+                              <span className="text-[8px] font-black uppercase text-slate-500 tracking-widest">Modelos: {route.motivo || 'Geral'}</span>
                               <X size={10} className="text-slate-500 cursor-pointer" onClick={() => setActiveObsId(null)} />
                             </div>
                             <div className="max-h-48 overflow-y-auto scrollbar-thin">
                               {(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : Object.values(OBSERVATION_TEMPLATES).flat())
                                 .filter(t => t.toLowerCase().includes((route.observacao || "").toLowerCase()))
                                 .map((template, tIdx) => (
-                                  <div 
-                                    key={tIdx} 
-                                    onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }}
-                                    className="p-2 text-[10px] text-slate-300 hover:bg-blue-600 hover:text-white cursor-pointer transition-all border-b border-slate-800 last:border-0 flex items-center gap-2"
-                                  >
+                                  <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-2 text-[10px] text-slate-300 hover:bg-blue-600 hover:text-white cursor-pointer transition-all border-b border-slate-800 last:border-0 flex items-center gap-2">
                                     <ChevronRight size={10} className="shrink-0" />
                                     <span className="truncate">{template}</span>
                                   </div>
                                 ))}
-                              {route.motivo && (!OBSERVATION_TEMPLATES[route.motivo] || OBSERVATION_TEMPLATES[route.motivo].length === 0) && (
-                                <div className="p-4 text-center text-[10px] text-slate-500 italic">Nenhum template para este motivo.</div>
-                              )}
                             </div>
                           </div>
                         )}
                       </td>
                       <td className="p-0 border-r border-[#1e1e24]"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
-                      {isAvisoVisible ? (
-                        <td className="p-0 border-r border-[#1e1e24]"><select value={route.aviso} onChange={(e) => updateCell(route.id, 'aviso', e.target.value)} className={`${textClass} text-center appearance-none text-white`}><option value="SIM">SIM</option><option value="NÃO">NÃO</option></select></td>
-                      ) : (
-                        <td className="w-8 border-r border-[#1e1e24] bg-black/10"></td>
-                      )}
                       <td className="p-1 border-r border-[#1e1e24] text-center font-black uppercase text-[9px] text-slate-300">{route.operacao || "---"}</td>
                       <td className="p-1 border-r border-[#1e1e24] text-center">
                         <span className={`px-2 py-0.5 rounded-[4px] text-[8px] font-black border ${displayStatus === 'OK' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' : 'bg-red-900/30 border-red-800 text-red-400'}`}>{displayStatus}</span>
