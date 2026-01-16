@@ -414,5 +414,69 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}`, token, { method: 'DELETE' });
+  },
+
+  /**
+   * Move rotas para a lista de histórico checklist_web_hist
+   * GUID Destino: 856bf9d5-6081-4360-bcad-e771cbabfda8
+   */
+  async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number }> {
+    const siteId = await getResolvedSiteId(token);
+    const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
+    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
+    
+    const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
+    
+    let success = 0;
+    let failed = 0;
+
+    for (const item of items) {
+        try {
+            // 1. Montar fields para histórico
+            const raw: any = {
+                Title: item.rota,
+                Semana: item.semana,
+                DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null,
+                HorarioInicio: item.inicio,
+                Motorista: item.motorista,
+                Placa: item.placa,
+                HorarioSaida: item.saida,
+                MotivoAtraso: item.motivo,
+                Observacao: item.observacao,
+                StatusGeral: item.statusGeral,
+                Aviso: item.aviso,
+                Operacao: item.operacao,
+                StatusOp: item.statusOp,
+                TempoGap: item.tempo
+            };
+
+            const histFields: any = {};
+            Object.keys(raw).forEach(k => {
+                const int = resolveFieldName(histMapping, k);
+                if (histInternals.has(int)) histFields[int] = raw[k];
+            });
+
+            // 2. POST no histórico
+            const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, {
+                method: 'POST',
+                body: JSON.stringify({ fields: histFields })
+            });
+
+            // 3. DELETE do original se sucesso
+            if (postRes && postRes.id) {
+                await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, {
+                    method: 'DELETE'
+                });
+                success++;
+            } else {
+                failed++;
+            }
+        } catch (err) {
+            console.error(`Erro ao arquivar item ${item.rota}:`, err);
+            failed++;
+        }
+    }
+
+    return { success, failed };
   }
 };

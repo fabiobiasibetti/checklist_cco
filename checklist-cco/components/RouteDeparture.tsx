@@ -9,7 +9,8 @@ import {
   AlertTriangle, Link, CheckCircle2, ChevronDown, 
   Filter, Search, Check, CheckSquare, Square,
   BarChart3, PieChart as PieChartIcon, TrendingUp,
-  Activity, EyeOff, ChevronRight, AlignLeft, Type as TypeIcon
+  Activity, EyeOff, ChevronRight, AlignLeft, Type as TypeIcon,
+  Archive
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 
@@ -62,6 +63,7 @@ const OBSERVATION_TEMPLATES: Record<string, string[]> = {
   'Infraestrutura': []
 };
 
+// Componente de Filtro extraído para evitar perda de foco durante re-renders
 const FilterDropdown = ({ col, routes, colFilters, setColFilters, selectedFilters, setSelectedFilters, onClose, innerRef }: any) => {
     const values: string[] = Array.from(new Set(routes.map((r: any) => String(r[col] || "")))).sort() as string[];
     const selected = (selectedFilters[col] as string[]) || [];
@@ -178,10 +180,31 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (confirm(`Deseja excluir os ${selectedIds.size} registros selecionados?`)) {
         setIsSyncing(true);
         try {
+            // Fix: Explicitly type id as string to satisfy SharePointService parameter type
             await Promise.all(Array.from(selectedIds).map((id: string) => SharePointService.deleteDeparture(token, id)));
             setRoutes(prev => prev.filter(r => !selectedIds.has(r.id)));
             setSelectedIds(new Set());
         } catch (err: any) { alert("Erro ao excluir: " + err.message); } finally { setIsSyncing(false); }
+    }
+  };
+
+  const handleArchiveFiltered = async () => {
+    const visibleRoutes = filteredRoutes;
+    if (visibleRoutes.length === 0) return;
+
+    if (confirm(`Tem certeza que deseja mover as ${visibleRoutes.length} rotas listadas para o histórico? Elas sairão desta tela permanentemente.`)) {
+        const token = getAccessToken();
+        if (!token) return;
+        setIsSyncing(true);
+        try {
+            const result = await SharePointService.moveDeparturesToHistory(token, visibleRoutes);
+            alert(`Arquivamento concluído!\nSucesso: ${result.success}\nFalhas: ${result.failed}`);
+            await loadData();
+        } catch (err: any) {
+            alert("Erro durante o arquivamento: " + err.message);
+        } finally {
+            setIsSyncing(false);
+        }
     }
   };
 
@@ -201,6 +224,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         if (obsDropdownRef.current && !obsDropdownRef.current.contains(e.target as Node)) { setActiveObsId(null); }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
+        // Atalho CTRL + SHIFT + L para limpar filtros
+        if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'L') {
+            e.preventDefault();
+            setColFilters({});
+            setSelectedFilters({});
+            setSelectedIds(new Set());
+            console.log("Filtros limpos via atalho.");
+        }
+
         if (e.key === 'Delete' && selectedIds.size > 0) {
             const target = e.target as HTMLElement;
             if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') { removeSelectedRows(); }
@@ -333,10 +365,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const tolerance = String(config?.tolerancia || "00:00:00");
     const inicio = String(route.inicio || "00:00:00");
     const saida = String(route.saida || "00:00:00");
-    const { isOutOfTolerance, status } = calculateGap(inicio, saida, tolerance);
+    const { status } = calculateGap(inicio, saida, tolerance);
     
-    // Design Minimalista: Cores Mais Vibrantes para Visibilidade (Realce)
-    if (saida !== '00:00:00' && status === 'Atrasado') return "border-l-[6px] border-orange-600 bg-orange-100/80 shadow-sm";
+    // Design Minimalista: Cores Mais Vibrantes para Visibilidade (Realce solicitado)
+    if (saida !== '00:00:00' && status === 'Atrasado') return "border-l-[6px] border-orange-600 bg-orange-200/80 shadow-inner";
     if (status === 'Adiantado') return "border-l-[6px] border-blue-600 bg-blue-100/80 shadow-sm";
     
     const toleranceSec = timeToSeconds(tolerance);
@@ -418,6 +450,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           </button>
           <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 font-bold border border-slate-700 uppercase text-[10px] tracking-wide transition-all shadow-sm"><BarChart3 size={16} /> Indicadores</button>
           <button onClick={loadData} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-700 bg-slate-900"><RefreshCw size={18} /></button>
+          <button onClick={handleArchiveFiltered} disabled={isSyncing || filteredRoutes.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-slate-300 rounded-lg hover:bg-slate-800 font-bold border border-slate-700 uppercase text-[10px] tracking-wide shadow-sm transition-all disabled:opacity-30"><Archive size={16} /> Arquivar</button>
           <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold border border-emerald-700 uppercase text-[10px] tracking-wide shadow-sm transition-all"><Upload size={16} /> Importar</button>
           <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-bold border border-primary-700 uppercase text-[10px] tracking-wide shadow-md transition-all"><Plus size={16} /> Nova Rota</button>
         </div>
@@ -425,7 +458,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white rounded-2xl border border-slate-700/50 shadow-2xl relative scrollbar-thin overflow-x-auto">
         <div style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left', width: `${100 / zoomLevel}%` }}>
-            <table className="border-collapse table-fixed w-full min-w-max h-px">
+            <table className="border-separate border-spacing-0 table-fixed w-full min-w-max h-px">
               <thead className="sticky top-0 z-50 bg-[#1e293b] text-white shadow-md">
                 <tr className="h-12">
                   {[
@@ -443,7 +476,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     { id: 'status', label: 'STATUS' },
                     { id: 'tempo', label: 'TEMPO' }
                   ].map(col => {
-                    if (col.id === 'select') return <th key={col.id} style={{ width: colWidths.select }} className="bg-slate-900/50"></th>;
+                    if (col.id === 'select') return <th key={col.id} style={{ width: colWidths.select }} className="bg-slate-900/50 border-r border-slate-700/50"></th>;
                     const hasFilter = !!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0;
                     return (
                       <th key={col.id} style={{ width: colWidths[col.id] }} className="relative p-1 border-r border-slate-700/50 text-[10px] font-black uppercase tracking-wider text-left select-none group">
@@ -587,7 +620,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                         </div>
                         <div className="p-6 rounded-3xl bg-white border border-slate-200 shadow-sm h-[400px] flex flex-col">
                             <h4 className="text-slate-700 font-black uppercase text-xs tracking-widest mb-6 flex items-center gap-2"><BarChart3 size={16} className="text-yellow-500" /> Motivos de Desvio</h4>
-                            <div className="flex-1"><ResponsiveContainer width="100%" height="100%"><BarChart data={dashboardStats.reasonData} layout="vertical"><XAxis type="number" hide /><YAxis dataKey="name" type="category" width={120} tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ borderRadius: '12px', border: 'none' }} cursor={{ fill: 'rgba(0,0,0,0.02)' }} /><Bar dataKey="value" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={20} /></BarChart></ResponsiveContainer></div>
+                            <div className="flex-1"><ResponsiveContainer width="100%" height="100%"><BarChart data={dashboardStats.reasonData} layout="vertical"><XAxis type="number" hide /><YAxis dataKey="name" type="category" width={120} tick={{ fill: '#64748b', fontSize: 10, fontBold: 'bold' }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ borderRadius: '12px', border: 'none' }} cursor={{ fill: 'rgba(0,0,0,0.02)' }} /><Bar dataKey="value" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={20} /></BarChart></ResponsiveContainer></div>
                         </div>
                     </div>
                 </div>
