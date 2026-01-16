@@ -27,6 +27,8 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     } catch(e) { 
         errDetail = await res.text(); 
     }
+    // Log de erro detalhado para depuração
+    console.error(`[GRAPH_ERROR] Endpoint: ${endpoint} | Status: ${res.status} | Msg: ${errDetail}`);
     throw new Error(errDetail);
   }
   return res.status === 204 ? null : res.json();
@@ -89,43 +91,18 @@ export const SharePointService = {
   async getAllListsMetadata(token: string): Promise<any[]> {
     try {
       const siteId = await getResolvedSiteId(token);
-      const listsToExplore = [
-        'Tarefas_Checklist',
-        'Operacoes_Checklist',
-        'Status_Checklist',
-        'Historico_checklist_web',
-        'Usuarios_cco',
-        'CONFIG_SAIDA_DE_ROTAS',
-        'Dados_Saida_de_rotas',
-        'Rotas_Operacao_Checklist'
-      ];
-
+      const listsToExplore = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco', 'CONFIG_SAIDA_DE_ROTAS', 'Dados_Saida_de_rotas', 'Rotas_Operacao_Checklist'];
       const results = await Promise.all(listsToExplore.map(async (listName) => {
         try {
           const list = await findListByIdOrName(siteId, listName, token);
           const columnsResponse = await graphFetch(`/sites/${siteId}/lists/${list.id}/columns`, token);
-          return {
-            list: {
-              id: list.id,
-              displayName: list.displayName,
-              webUrl: list.webUrl
-            },
-            columns: columnsResponse.value || [],
-            error: null
-          };
+          return { list: { id: list.id, displayName: list.displayName, webUrl: list.webUrl }, columns: columnsResponse.value || [], error: null };
         } catch (e: any) {
-          return {
-            list: { displayName: listName, id: listName, webUrl: '#' },
-            columns: [],
-            error: e.message
-          };
+          return { list: { displayName: listName, id: listName, webUrl: '#' }, columns: [], error: e.message };
         }
       }));
       return results;
-    } catch (e) {
-      console.error("Error fetching all lists metadata:", e);
-      return [];
-    }
+    } catch (e) { return []; }
   },
 
   async getTasks(token: string): Promise<SPTask[]> {
@@ -153,7 +130,7 @@ export const SharePointService = {
         const { mapping } = await getListColumnMapping(siteId, list.id, token);
         const emailField = mapping['responsavel'] || 'Responsavel';
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-        const filtered = (data.value || [])
+        return (data.value || [])
           .map((item: any) => ({
             id: String(item.fields.id || item.id),
             Title: item.fields.Title || "OP",
@@ -162,7 +139,6 @@ export const SharePointService = {
           }))
           .filter((op: SPOperation) => op.Email.toLowerCase() === userEmail.toLowerCase().trim())
           .sort((a: SPOperation, b: SPOperation) => a.Ordem - b.Ordem);
-        return filtered;
     } catch (e) { return []; }
   },
 
@@ -172,14 +148,10 @@ export const SharePointService = {
         const list = await findListByIdOrName(siteId, 'Usuarios_cco', token);
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
         return (data.value || []).map((item: any) => item.fields.Title).filter(Boolean).sort();
-    } catch (e) { 
-        return ['Logística 1', 'Logística 2', 'Supervisor'];
-    }
+    } catch (e) { return ['Logística 1', 'Logística 2', 'Supervisor']; }
   },
 
-  async getRegisteredUsers(token: string, _userEmail?: string): Promise<string[]> {
-      return this.getTeamMembers(token);
-  },
+  async getRegisteredUsers(token: string, _userEmail?: string): Promise<string[]> { return this.getTeamMembers(token); },
 
   async ensureMatrix(token: string, tasks: SPTask[], ops: SPOperation[]): Promise<void> {
     const siteId = await getResolvedSiteId(token);
@@ -217,13 +189,7 @@ export const SharePointService = {
         const filter = `fields/${colData} ge '${date}T00:00:00Z' and fields/${colData} le '${date}T23:59:59Z'`;
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}&$top=999`, token);
         return (data.value || []).map((item: any) => ({
-          id: item.id,
-          DataReferencia: item.fields[colData],
-          TarefaID: String(item.fields[resolveFieldName(mapping, 'TarefaID')] || ""),
-          OperacaoSigla: item.fields[resolveFieldName(mapping, 'OperacaoSigla')],
-          Status: item.fields[resolveFieldName(mapping, 'Status')],
-          Usuario: item.fields[resolveFieldName(mapping, 'Usuario')],
-          Title: item.fields.Title
+          id: item.id, DataReferencia: item.fields[colData], TarefaID: String(item.fields[resolveFieldName(mapping, 'TarefaID')] || ""), OperacaoSigla: item.fields[resolveFieldName(mapping, 'OperacaoSigla')], Status: item.fields[resolveFieldName(mapping, 'Status')], Usuario: item.fields[resolveFieldName(mapping, 'Usuario')], Title: item.fields.Title
         }));
     } catch (e) { return []; }
   },
@@ -234,7 +200,6 @@ export const SharePointService = {
     const { mapping, readOnly, internalNames } = await getListColumnMapping(siteId, list.id, token);
     const filter = `fields/Title eq '${status.Title}'`;
     const existing = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
-    
     const fields: any = {};
     if (!existing.value?.length) {
         const raw = { Title: status.Title, ChaveUnica: status.Title, DataReferencia: new Date(status.DataReferencia).toISOString(), TarefaID: status.TarefaID, OperacaoSigla: status.OperacaoSigla, Status: status.Status, Usuario: status.Usuario };
@@ -266,16 +231,7 @@ export const SharePointService = {
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
       const celulaField = mapping['celula'] || 'celula';
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-      return (data.value || [])
-        .map((item: any) => ({
-          id: item.id, 
-          timestamp: item.fields.Data, 
-          resetBy: item.fields.Title, 
-          email: (item.fields[celulaField] || "").toString().trim(), 
-          tasks: JSON.parse(item.fields.DadosJSON || '[]')
-        }))
-        .filter((record: HistoryRecord) => record.email?.toLowerCase() === userEmail.toLowerCase().trim())
-        .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      return (data.value || []).map((item: any) => ({ id: item.id, timestamp: item.fields.Data, resetBy: item.fields.Title, email: (item.fields[celulaField] || "").toString().trim(), tasks: JSON.parse(item.fields.DadosJSON || '[]') })).filter((record: HistoryRecord) => record.email?.toLowerCase() === userEmail.toLowerCase().trim()).sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     } catch (e) { return []; }
   },
 
@@ -285,21 +241,8 @@ export const SharePointService = {
         const list = await findListByIdOrName(siteId, 'CONFIG_SAIDA_DE_ROTAS', token);
         const { mapping } = await getListColumnMapping(siteId, list.id, token);
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-        
-        return (data.value || [])
-          .map((item: any) => {
-            const f = item.fields;
-            return {
-                operacao: f[resolveFieldName(mapping, 'OPERACAO')] || "",
-                email: (f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(),
-                tolerancia: f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00"
-            };
-          })
-          .filter(c => c.email === userEmail.toLowerCase().trim());
-    } catch (e) {
-        console.error("Erro ao carregar configs de rota:", e);
-        return [];
-    }
+        return (data.value || []).map((item: any) => { const f = item.fields; return { operacao: f[resolveFieldName(mapping, 'OPERACAO')] || "", email: (f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(), tolerancia: f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00" }; }).filter(c => c.email === userEmail.toLowerCase().trim());
+    } catch (e) { return []; }
   },
 
   async getRouteOperationMappings(token: string): Promise<RouteOperationMapping[]> {
@@ -308,24 +251,15 @@ export const SharePointService = {
         const list = await findListByIdOrName(siteId, 'Rotas_Operacao_Checklist', token);
         const { mapping } = await getListColumnMapping(siteId, list.id, token);
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-        return (data.value || []).map((item: any) => ({
-          id: item.id,
-          Title: item.fields.Title,
-          OPERACAO: item.fields[resolveFieldName(mapping, 'OPERACAO')]
-        }));
-    } catch (e) {
-        return [];
-    }
+        return (data.value || []).map((item: any) => ({ id: item.id, Title: item.fields.Title, OPERACAO: item.fields[resolveFieldName(mapping, 'OPERACAO')] }));
+    } catch (e) { return []; }
   },
 
   async addRouteOperationMapping(token: string, routeName: string, operation: string): Promise<void> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Rotas_Operacao_Checklist', token);
     const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
-    const fields: any = {
-      Title: routeName,
-      [resolveFieldName(mapping, 'OPERACAO')]: operation
-    };
+    const fields: any = { Title: routeName, [resolveFieldName(mapping, 'OPERACAO')]: operation };
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
   },
 
@@ -335,77 +269,28 @@ export const SharePointService = {
       const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
       const { mapping } = await getListColumnMapping(siteId, list.id, token);
       const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-      
       return (data.value || []).map((item: any) => {
         const f = item.fields;
         return {
-          id: String(item.id),
-          semana: f[resolveFieldName(mapping, 'Semana')] || "",
-          rota: f.Title || "",
-          data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "",
-          inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00",
-          motorista: f[resolveFieldName(mapping, 'Motorista')] || "",
-          placa: f[resolveFieldName(mapping, 'Placa')] || "",
-          saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00",
-          motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "",
-          observacao: f[resolveFieldName(mapping, 'Observacao')] || "",
-          statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK",
-          aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO",
-          operacao: f[resolveFieldName(mapping, 'Operacao')] || "",
-          statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK",
-          tempo: f[resolveFieldName(mapping, 'TempoGap')] || "OK",
-          createdAt: f.Created || new Date().toISOString()
+          id: String(item.id), semana: f[resolveFieldName(mapping, 'Semana')] || "", rota: f.Title || "", data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "", inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", motorista: f[resolveFieldName(mapping, 'Motorista')] || "", placa: f[resolveFieldName(mapping, 'Placa')] || "", saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", observacao: f[resolveFieldName(mapping, 'Observacao')] || "", statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", operacao: f[resolveFieldName(mapping, 'Operacao')] || "", statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", tempo: f[resolveFieldName(mapping, 'TempoGap')] || "OK", createdAt: f.Created || new Date().toISOString()
         };
       });
-    } catch (e) {
-      console.error("Erro ao carregar saídas do SharePoint:", e);
-      return [];
-    }
+    } catch (e) { return []; }
   },
 
   async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-    
-    const raw: any = {
-      Title: departure.rota,
-      Semana: departure.semana,
-      DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null,
-      HorarioInicio: departure.inicio,
-      Motorista: departure.motorista,
-      Placa: departure.placa,
-      HorarioSaida: departure.saida,
-      MotivoAtraso: departure.motivo,
-      Observacao: departure.observacao,
-      StatusGeral: departure.statusGeral,
-      Aviso: departure.aviso,
-      Operacao: departure.operacao,
-      StatusOp: departure.statusOp,
-      TempoGap: departure.tempo
-    };
-
+    const raw: any = { Title: departure.rota, Semana: departure.semana, DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: departure.inicio, Motorista: departure.motorista, Placa: departure.placa, HorarioSaida: departure.saida, MotivoAtraso: departure.motivo, Observacao: departure.observacao, StatusGeral: departure.statusGeral, Aviso: departure.aviso, Operacao: departure.operacao, StatusOp: departure.statusOp, TempoGap: departure.tempo };
     const fields: any = {};
-    Object.keys(raw).forEach(k => {
-      const int = resolveFieldName(mapping, k);
-      if (int === 'Title' || (internalNames.has(int) && !readOnly.has(int))) {
-          fields[int] = raw[k];
-      }
-    });
-
+    Object.keys(raw).forEach(k => { const int = resolveFieldName(mapping, k); if (int === 'Title' || (internalNames.has(int) && !readOnly.has(int))) { fields[int] = raw[k]; } });
     const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
-
     if (isUpdate) {
-      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${departure.id}/fields`, token, { 
-          method: 'PATCH', 
-          body: JSON.stringify(fields) 
-      });
+      await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${departure.id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
       return departure.id;
     } else {
-      const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { 
-          method: 'POST', 
-          body: JSON.stringify({ fields }) 
-      });
+      const res = await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
       return String(res.id);
     }
   },
@@ -416,23 +301,23 @@ export const SharePointService = {
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}`, token, { method: 'DELETE' });
   },
 
-  /**
-   * Move rotas para a lista de histórico checklist_web_hist
-   * GUID Destino: 856bf9d5-6081-4360-bcad-e771cbabfda8
-   */
   async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number }> {
+    console.log(`[SP_SERVICE] Iniciando arquivamento de ${items.length} itens.`);
     const siteId = await getResolvedSiteId(token);
     const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
     
+    console.log(`[SP_SERVICE] Lista de Destino (History): ${historyListId}`);
+    
     const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
     
-    let success = 0;
-    let failed = 0;
+    let successCount = 0;
+    let failedCount = 0;
 
     for (const item of items) {
         try {
-            // 1. Montar fields para histórico
+            console.log(`[SP_SERVICE] Processando Rota: ${item.rota} (ID: ${item.id})`);
+            
             const raw: any = {
                 Title: item.rota,
                 Semana: item.semana,
@@ -456,27 +341,30 @@ export const SharePointService = {
                 if (histInternals.has(int)) histFields[int] = raw[k];
             });
 
-            // 2. POST no histórico
+            console.log(`[SP_SERVICE] Payload POST para histórico:`, JSON.stringify(histFields));
+
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, {
                 method: 'POST',
                 body: JSON.stringify({ fields: histFields })
             });
 
-            // 3. DELETE do original se sucesso
             if (postRes && postRes.id) {
+                console.log(`[SP_SERVICE] Sucesso no arquivamento. Deletando original...`);
                 await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, {
                     method: 'DELETE'
                 });
-                success++;
+                successCount++;
             } else {
-                failed++;
+                console.warn(`[SP_SERVICE] Falha ao criar registro no histórico para rota ${item.rota}. Item não deletado.`);
+                failedCount++;
             }
-        } catch (err) {
-            console.error(`Erro ao arquivar item ${item.rota}:`, err);
-            failed++;
+        } catch (err: any) {
+            console.error(`[SP_SERVICE] Erro crítico ao arquivar item ${item.rota}:`, err.message);
+            failedCount++;
         }
     }
 
-    return { success, failed };
+    console.log(`[SP_SERVICE] Arquivamento Finalizado. Sucessos: ${successCount}, Falhas: ${failedCount}`);
+    return { success: successCount, failed: failedCount };
   }
 };
