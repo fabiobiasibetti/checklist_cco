@@ -125,27 +125,30 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const handleArchiveFiltered = async () => {
     const visibleRoutes = filteredRoutes;
-    if (visibleRoutes.length === 0) { alert("Sem itens visíveis para arquivar."); return; }
-    if (confirm(`Atenção: Mover ${visibleRoutes.length} rotas para o Histórico? Elas sairão desta grade.`)) {
+    if (visibleRoutes.length === 0) { alert("Nenhum item visível para arquivar."); return; }
+    if (confirm(`Atenção: Você está prestes a mover ${visibleRoutes.length} rotas para o Histórico Definitivo. Elas sairão desta grade imediatamente. Confirma?`)) {
         const token = getAccessToken();
         setIsSyncing(true);
         try {
             const result = await SharePointService.moveDeparturesToHistory(token, visibleRoutes);
             if (result.failed > 0) {
-              alert(`Arquivamento concluído com alertas!\n- Sucesso: ${result.success}\n- Falhas: ${result.failed}\n\n⚠️ VERIFIQUE O CONSOLE (F12) PARA O ERRO TÉCNICO.`);
+              alert(`Arquivamento concluído com Falhas Parciais!\n\n- Sucesso: ${result.success}\n- Falhas: ${result.failed}\n\nMOTIVO TÉCNICO: ${result.lastError}\n\nVerifique o console (F12) para o payload exato.`);
             } else {
-              alert(`Sucesso! ${result.success} rotas movidas.`);
+              alert(`Sucesso absoluto! ${result.success} rotas movidas para o histórico.`);
             }
             await loadData();
-        } catch (err: any) { alert("Falha crítica no arquivamento: " + err.message); } 
-        finally { setIsSyncing(false); }
+        } catch (err: any) { 
+            alert("ERRO CRÍTICO NO ARQUIVAMENTO:\n" + err.message); 
+        } finally { 
+            setIsSyncing(false); 
+        }
     }
   };
 
   useEffect(() => { loadData(); const timer = setInterval(() => setCurrentTime(new Date()), 10000); return () => clearInterval(timer); }, [currentUser]);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => { if (resizingRef.current) { const { col, startX, startWidth } = resizingRef.current; const newWidth = Math.max(10, startWidth + (e.clientX - startX)); setColWidths(prev => ({ ...prev, [col]: newWidth })); } };
+    const handleMouseMove = (e: MouseEvent) => { if (resizingRef.current) { const { col, startX, startWidth } = resizingRef.current; const newWidth = Math.max(10, startWidth + (e.clientX - startWidth)); setColWidths(prev => ({ ...prev, [col]: newWidth })); } };
     const handleMouseUp = () => { resizingRef.current = null; };
     const handleClickOutside = (e: MouseEvent) => { if (filterRef.current && !filterRef.current.contains(e.target as Node)) { setActiveFilterCol(null); } if (obsDropdownRef.current && !obsDropdownRef.current.contains(e.target as Node)) { setActiveObsId(null); } };
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -154,10 +157,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
         if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === 'L') { e.preventDefault(); setColFilters({}); setSelectedFilters({}); setSelectedIds(new Set()); }
         if (e.key === 'Delete' && selectedIds.size > 0) {
-            if (confirm(`Excluir ${selectedIds.size} itens?`)) {
+            if (confirm(`Excluir permanentemente os ${selectedIds.size} itens selecionados?`)) {
                 const token = getAccessToken();
                 setIsSyncing(true);
-                Promise.all(Array.from(selectedIds).map((id: string) => SharePointService.deleteDeparture(token, id))).then(() => loadData()).finally(() => setIsSyncing(false));
+                Promise.all(Array.from(selectedIds).map((id: string) => SharePointService.deleteDeparture(token, id))).then(() => {
+                   alert("Exclusão concluída.");
+                   loadData();
+                }).finally(() => setIsSyncing(false));
             }
         }
     };
@@ -166,7 +172,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     window.addEventListener('mousedown', handleClickOutside);
     window.addEventListener('keydown', handleKeyDown);
     return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); window.removeEventListener('mousedown', handleClickOutside); window.removeEventListener('keydown', handleKeyDown); };
-  }, [selectedIds]);
+  }, [selectedIds, loadData]);
 
   const startResize = (e: React.MouseEvent, col: string) => { e.preventDefault(); resizingRef.current = { col, startX: e.clientX, startWidth: colWidths[col] }; };
 
@@ -232,7 +238,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const handleImport = async () => {
     if (!importText.trim()) return; setIsProcessingImport(true);
     try {
-        const parsed = parseRouteDeparturesManual(importText); if (parsed.length === 0) throw new Error("Sem dados.");
+        const parsed = parseRouteDeparturesManual(importText); if (parsed.length === 0) throw new Error("Sem dados válidos.");
         const token = getAccessToken();
         for (const item of parsed) {
             const rotaStr = (item.rota || "").trim();
@@ -249,8 +255,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const getAlertStyles = (route: RouteDeparture) => {
     const isDelayed = route.statusOp === 'Atrasado';
     const isEarly = route.statusOp === 'Adiantado';
-    if (route.saida !== '00:00:00' && isDelayed) return "bg-orange-200 border-l-[6px] border-orange-600 shadow-inner";
-    if (isEarly) return "bg-blue-100 border-l-[6px] border-blue-600";
+    // Estilo de linha ATRASADA muito evidente
+    if (route.saida !== '00:00:00' && isDelayed) return "bg-orange-200 border-l-[8px] border-orange-600 shadow-inner";
+    if (isEarly) return "bg-blue-100 border-l-[8px] border-blue-600";
     return "border-l-4 border-transparent";
   };
 
@@ -275,7 +282,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         <div className="flex items-center gap-4">
           <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg shadow-primary-600/20"><Clock size={20} /></div>
           <div>
-            <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">Saída de Rotas {isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}</h2>
+            <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">Controle de Saídas {isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}</h2>
             <div className="flex items-center gap-2"><ShieldCheck size={12} className="text-emerald-500"/><p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Responsável: {currentUser.name}</p></div>
           </div>
         </div>
@@ -285,7 +292,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           <button onClick={loadData} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all border border-slate-700 bg-slate-900"><RefreshCw size={18} /></button>
           <button onClick={handleArchiveFiltered} disabled={isSyncing || filteredRoutes.length === 0} className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-slate-300 rounded-lg hover:bg-slate-800 font-bold border border-slate-700 uppercase text-[10px] tracking-wide shadow-sm transition-all disabled:opacity-30"><Archive size={16} /> Arquivar</button>
           <button onClick={() => setIsImportModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold border border-emerald-700 uppercase text-[10px] tracking-wide shadow-sm transition-all"><Upload size={16} /> Importar</button>
-          <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-bold border border-primary-700 uppercase text-[10px] tracking-wide shadow-md transition-all"><Plus size={16} /> Nova</button>
+          <button onClick={() => setIsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 font-bold border border-primary-700 uppercase text-[10px] tracking-wide shadow-md transition-all"><Plus size={16} /> Nova Rota</button>
         </div>
       </div>
 
@@ -295,10 +302,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               <thead className="sticky top-0 z-50 bg-[#1e293b] text-white shadow-md">
                 <tr className="h-12">
                   {[ { id: 'select', label: '' }, { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' }, { id: 'motorista', label: 'MOTORISTA' }, { id: 'placa', label: 'PLACA' }, { id: 'saida', label: 'SAÍDA' }, { id: 'motivo', label: 'MOTIVO' }, { id: 'observacao', label: 'OBSERVAÇÃO' }, { id: 'geral', label: 'GERAL' }, { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' } ].map(col => {
-                    if (col.id === 'select') return <th key={col.id} style={{ width: colWidths.select }} className="bg-slate-900/50 border-r border-slate-700/50"></th>;
+                    if (col.id === 'select') return <th key={col.id} style={{ width: colWidths.select }} className="bg-slate-900/50 border border-slate-700/50"></th>;
                     const hasFilter = !!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0;
                     return (
-                      <th key={col.id} style={{ width: colWidths[col.id] }} className="relative p-1 border-r border-slate-700/50 text-[10px] font-black uppercase tracking-wider text-left select-none group">
+                      <th key={col.id} style={{ width: colWidths[col.id] }} className="relative p-1 border border-slate-700/50 text-[10px] font-black uppercase tracking-wider text-left select-none group">
                         <div className="flex items-center justify-between px-2 h-full"><span>{col.label}</span><button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded transition-all ${hasFilter ? 'text-yellow-400' : 'text-white/40 hover:text-white/60'}`}><Filter size={11} /></button></div>
                         {activeFilterCol === col.id && <FilterDropdown col={col.id} routes={routes} colFilters={colFilters} setColFilters={setColFilters} selectedFilters={selectedFilters} setSelectedFilters={setSelectedFilters} onClose={() => setActiveFilterCol(null)} innerRef={filterRef} />}
                         <div onMouseDown={(e) => startResize(e, col.id)} className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10" />
@@ -311,14 +318,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 {filteredRoutes.map((route) => {
                   const alertClasses = getAlertStyles(route);
                   const isSelected = selectedIds.has(route.id);
-                  const rowBg = isSelected ? 'bg-primary-100/80' : alertClasses || 'bg-white hover:bg-slate-50';
-                  const inputClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold text-slate-800 uppercase transition-all placeholder-slate-400 focus:bg-white/50";
-                  const cellClass = "p-0 border border-slate-300 transition-all";
+                  const rowBg = isSelected ? 'bg-primary-100/90' : alertClasses || 'bg-white hover:bg-slate-50';
+                  const inputClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold text-slate-800 uppercase transition-all placeholder-slate-400 focus:bg-white/80 focus:ring-1 focus:ring-primary-500/20";
+                  const cellClass = "p-0 border border-slate-300 transition-all overflow-hidden";
                   const isDelayed = route.statusOp === 'Atrasado';
 
                   return (
                     <tr key={route.id} className={`${rowBg} group transition-all h-auto`}>
-                      <td className={`${cellClass} border-r cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-primary-600' : 'hover:bg-slate-200'}`} onClick={() => toggleSelection(route.id)}></td>
+                      <td className={`${cellClass} cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-primary-600' : 'hover:bg-slate-200'}`} onClick={() => toggleSelection(route.id)}></td>
                       <td className={cellClass}><input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${inputClass} font-black text-primary-700`} /></td>
                       <td className={cellClass}><input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className={`${inputClass} text-center text-slate-600`} /></td>
                       <td className={cellClass}><input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id, 'inicio', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
@@ -326,24 +333,20 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className={cellClass}><input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className={cellClass}><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className={cellClass}>
-                        {isDelayed ? (
-                          <div className="flex items-center justify-center h-full px-2">
-                              <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-white/60 border border-slate-300 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 outline-none shadow-sm">
-                                  <option value="">Motivo...</option>{MOTIVOS.map(m => (<option key={m} value={m}>{m}</option>))}
-                              </select>
-                          </div>
-                        ) : null}
+                        <div className="flex items-center justify-center h-full px-1">
+                            <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-white/40 border border-slate-200 rounded-md px-2 py-1 text-[10px] font-bold text-slate-700 outline-none shadow-sm appearance-none">
+                                <option value="">---</option>{MOTIVOS.map(m => (<option key={m} value={m}>{m}</option>))}
+                            </select>
+                        </div>
                       </td>
                       <td className={`${cellClass} relative group/obs align-top h-full min-h-[44px]`}>
-                        {isDelayed ? (
-                          <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
-                            <textarea value={route.observacao || ""} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id)} placeholder="Obs..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-800 placeholder-slate-500 resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate pr-8'}`} style={{ height: isTextWrapEnabled ? 'auto' : '44px' }} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                            {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-primary-700 transition-colors opacity-60 group-hover/obs:opacity-100"><ChevronDown size={14} /></button>}
-                          </div>
-                        ) : null}
+                        <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
+                          <textarea value={route.observacao || ""} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id)} placeholder="..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-800 placeholder-slate-500 resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate pr-8'}`} style={{ height: isTextWrapEnabled ? 'auto' : '44px' }} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                          {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-primary-700 transition-colors opacity-60 group-hover/obs:opacity-100"><ChevronDown size={14} /></button>}
+                        </div>
                         {activeObsId === route.id && (
                           <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white border border-slate-300 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
-                            <div className="p-2 border-b border-slate-100 flex justify-between items-center bg-slate-50"><span className="text-[9px] font-black uppercase text-slate-500">Modelos</span><X size={12} className="text-slate-400 cursor-pointer" onClick={() => setActiveObsId(null)} /></div>
+                            <div className="p-2 border-b border-slate-100 flex justify-between items-center bg-slate-50"><span className="text-[9px] font-black uppercase text-slate-500">Auto-Completar</span><X size={12} className="text-slate-400 cursor-pointer" onClick={() => setActiveObsId(null)} /></div>
                             <div className="max-h-48 overflow-y-auto scrollbar-thin">{(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : []).map((template, tIdx) => ( <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-3 text-[10px] text-slate-700 hover:bg-primary-100 cursor-pointer border-b border-slate-100 flex items-center gap-2"><ChevronRight size={12} className="shrink-0 text-primary-500" />{template}</div> ))}</div>
                           </div>
                         )}
@@ -379,8 +382,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
              <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in">
-                <div className="bg-emerald-600 p-6 flex justify-between items-center text-white font-black uppercase tracking-widest text-xs"><div className="flex items-center gap-3"><Upload size={20} /> Importar Excel</div><button onClick={() => setIsImportModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg"><X size={20} /></button></div>
-                <div className="p-8"><textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-5 border-2 border-slate-100 rounded-2xl bg-slate-50 text-[11px] font-mono mb-6 outline-none shadow-inner" placeholder="Cole as linhas do Excel aqui..." /><button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="w-full py-4 bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl transition-all hover:bg-emerald-700 shadow-lg disabled:opacity-50">{isProcessingImport ? <Loader2 className="animate-spin" /> : 'Processar Agora'}</button></div>
+                <div className="bg-emerald-600 p-6 flex justify-between items-center text-white font-black uppercase tracking-widest text-xs"><div className="flex items-center gap-3"><Upload size={20} /> Importar Dados</div><button onClick={() => setIsImportModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg"><X size={20} /></button></div>
+                <div className="p-8"><textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-5 border-2 border-slate-100 rounded-2xl bg-slate-50 text-[11px] font-mono mb-6 outline-none shadow-inner" placeholder="Cole aqui..." /><button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="w-full py-4 bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl transition-all hover:bg-emerald-700 shadow-lg disabled:opacity-50">{isProcessingImport ? <Loader2 size={18} className="animate-spin" /> : 'Processar Agora'}</button></div>
              </div>
         </div>
       )}
@@ -399,7 +402,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                     <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Motorista</label><input type="text" required value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none"/></div>
                     <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Placa</label><input type="text" required value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-[11px] font-black outline-none"/></div>
                 </div>
-                <button type="submit" disabled={isSyncing} className="w-full py-4 bg-primary-600 hover:bg-primary-700 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 shadow-xl transition-all mt-4">{isSyncing ? <Loader2 className="animate-spin" /> : <Save size={16} />} SALVAR AGORA</button>
+                <button type="submit" disabled={isSyncing} className="w-full py-4 bg-primary-600 hover:bg-primary-700 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 shadow-xl transition-all mt-4">{isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} SALVAR NO SHAREPOINT</button>
             </form>
           </div>
         </div>

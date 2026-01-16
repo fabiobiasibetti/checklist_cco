@@ -27,11 +27,11 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     } catch(e) { 
         errDetail = await res.text(); 
     }
-    // Log crítico para debug em produção
-    console.error(`[GRAPH_ERROR] Falha na chamada API!
-      Endpoint: ${endpoint}
-      Status: ${res.status}
-      Detalhe do SharePoint: ${errDetail}
+    // Log pesado no console para debug rápido
+    console.error(`[SHAREPOINT_API_FAILURE]
+      URL: ${url}
+      STATUS: ${res.status}
+      ERROR: ${errDetail}
     `);
     throw new Error(errDetail);
   }
@@ -55,7 +55,7 @@ async function findListByIdOrName(siteId: string, listName: string, token: strin
     );
     if (found) return found;
   }
-  throw new Error(`Lista '${listName}' não encontrada no site.`);
+  throw new Error(`Lista '${listName}' não encontrada.`);
 }
 
 function normalizeString(str: string): string {
@@ -305,22 +305,23 @@ export const SharePointService = {
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}`, token, { method: 'DELETE' });
   },
 
-  async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number }> {
-    console.log(`[SP_SERVICE] Iniciando arquivamento atômico de ${items.length} itens.`);
+  async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number, lastError?: string }> {
+    console.log(`[ARCHIVE_START] Iniciando migração de ${items.length} itens.`);
     const siteId = await getResolvedSiteId(token);
     const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     
-    // GUID LIMPO: Sem encoded chars
-    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
+    // GUID LIMPO: Removendo caracteres indesejados caso existam
+    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8".replace(/[{}]/g, "");
     
     const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
     
     let successCount = 0;
     let failedCount = 0;
+    let lastErrorMessage = "";
 
     for (const item of items) {
         try {
-            console.log(`[SP_SERVICE] Preparando item: ${item.rota}`);
+            console.log(`[ARCHIVE_PROCESS] Preparando: ${item.rota} (ID: ${item.id})`);
             
             const raw: any = {
                 Title: item.rota,
@@ -345,7 +346,7 @@ export const SharePointService = {
                 if (histInternals.has(int)) histFields[int] = raw[k];
             });
 
-            console.log('[DEBUG PAYLOAD]', JSON.stringify(histFields));
+            console.log('[DEBUG_PAYLOAD_POST]', JSON.stringify(histFields));
 
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, {
                 method: 'POST',
@@ -353,21 +354,23 @@ export const SharePointService = {
             });
 
             if (postRes && postRes.id) {
-                console.log(`[SP_SERVICE] POST concluído. Deletando original ID ${item.id}...`);
+                console.log(`[ARCHIVE_SUCCESS] Registro criado no histórico. Removendo original...`);
                 await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, {
                     method: 'DELETE'
                 });
                 successCount++;
             } else {
                 failedCount++;
+                lastErrorMessage = "Resposta da API sem ID de confirmação.";
             }
         } catch (err: any) {
-            console.error(`[SP_SERVICE] Erro no item ${item.rota}:`, err.message);
+            console.error(`[ARCHIVE_ERROR] Erro na rota ${item.rota}:`, err.message);
             failedCount++;
+            lastErrorMessage = err.message;
         }
     }
 
-    console.log(`[SP_SERVICE] Arquivamento Finalizado. S: ${successCount}, F: ${failedCount}`);
-    return { success: successCount, failed: failedCount };
+    console.log(`[ARCHIVE_FINISH] Sucesso: ${successCount}, Falhas: ${failedCount}`);
+    return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
   }
 };
