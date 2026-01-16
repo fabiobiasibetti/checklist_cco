@@ -14,13 +14,8 @@ import {
 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
 
-// Added Sparkles component missing in this file
 const Sparkles = ({ size = 20, className = "" }) => (
-    <svg 
-        width={size} height={size} viewBox="0 0 24 24" fill="none" 
-        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" 
-        className={className}
-    >
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
         <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
         <path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/>
     </svg>
@@ -130,15 +125,19 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const handleArchiveFiltered = async () => {
     const visibleRoutes = filteredRoutes;
-    if (visibleRoutes.length === 0) { alert("Nenhum item filtrado para arquivar."); return; }
-    if (confirm(`Atenção: Você está prestes a mover ${visibleRoutes.length} rotas para o Histórico. Confirma?`)) {
+    if (visibleRoutes.length === 0) { alert("Sem itens visíveis para arquivar."); return; }
+    if (confirm(`Atenção: Mover ${visibleRoutes.length} rotas para o Histórico? Elas sairão desta grade.`)) {
         const token = getAccessToken();
         setIsSyncing(true);
         try {
             const result = await SharePointService.moveDeparturesToHistory(token, visibleRoutes);
-            alert(`Arquivamento concluído com sucesso!\n- Movidos: ${result.success}\n- Falhas: ${result.failed}\nConsulte o console (F12) para logs detalhados.`);
+            if (result.failed > 0) {
+              alert(`Arquivamento concluído com alertas!\n- Sucesso: ${result.success}\n- Falhas: ${result.failed}\n\n⚠️ VERIFIQUE O CONSOLE (F12) PARA O ERRO TÉCNICO.`);
+            } else {
+              alert(`Sucesso! ${result.success} rotas movidas.`);
+            }
             await loadData();
-        } catch (err: any) { alert("Erro fatal no arquivamento: " + err.message); } 
+        } catch (err: any) { alert("Falha crítica no arquivamento: " + err.message); } 
         finally { setIsSyncing(false); }
     }
   };
@@ -158,8 +157,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             if (confirm(`Excluir ${selectedIds.size} itens?`)) {
                 const token = getAccessToken();
                 setIsSyncing(true);
-                // Fix: ensure proper typing for token and id in Promise.all call
-                Promise.all(Array.from(selectedIds).map((id: string) => SharePointService.deleteDeparture(token as string, id))).then(() => loadData()).finally(() => setIsSyncing(false));
+                Promise.all(Array.from(selectedIds).map((id: string) => SharePointService.deleteDeparture(token, id))).then(() => loadData()).finally(() => setIsSyncing(false));
             }
         }
     };
@@ -168,7 +166,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     window.addEventListener('mousedown', handleClickOutside);
     window.addEventListener('keydown', handleKeyDown);
     return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); window.removeEventListener('mousedown', handleClickOutside); window.removeEventListener('keydown', handleKeyDown); };
-  }, [selectedIds, loadData]);
+  }, [selectedIds]);
 
   const startResize = (e: React.MouseEvent, col: string) => { e.preventDefault(); resizingRef.current = { col, startX: e.clientX, startWidth: colWidths[col] }; };
 
@@ -234,7 +232,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const handleImport = async () => {
     if (!importText.trim()) return; setIsProcessingImport(true);
     try {
-        const parsed = parseRouteDeparturesManual(importText); if (parsed.length === 0) throw new Error("Sem dados válidos.");
+        const parsed = parseRouteDeparturesManual(importText); if (parsed.length === 0) throw new Error("Sem dados.");
         const token = getAccessToken();
         for (const item of parsed) {
             const rotaStr = (item.rota || "").trim();
@@ -249,10 +247,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   };
 
   const getAlertStyles = (route: RouteDeparture) => {
-    const config = userConfigs.find(c => (c.operacao || "").toUpperCase().trim() === (route.operacao || "").toUpperCase().trim());
-    const { status } = calculateGap(route.inicio, route.saida, config?.tolerancia || "00:00:00");
-    if (route.saida !== '00:00:00' && status === 'Atrasado') return "border-l-[6px] border-orange-600 bg-orange-200/80 shadow-inner";
-    if (status === 'Adiantado') return "border-l-[6px] border-blue-600 bg-blue-100/80";
+    const isDelayed = route.statusOp === 'Atrasado';
+    const isEarly = route.statusOp === 'Adiantado';
+    if (route.saida !== '00:00:00' && isDelayed) return "bg-orange-200 border-l-[6px] border-orange-600 shadow-inner";
+    if (isEarly) return "bg-blue-100 border-l-[6px] border-blue-600";
     return "border-l-4 border-transparent";
   };
 
@@ -293,7 +291,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white rounded-2xl border border-slate-700/50 shadow-2xl relative scrollbar-thin overflow-x-auto">
         <div style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left', width: `${100 / zoomLevel}%` }}>
-            <table className="border-separate border-spacing-0 table-fixed w-full min-w-max h-px">
+            <table className="border-collapse table-fixed w-full min-w-max h-px">
               <thead className="sticky top-0 z-50 bg-[#1e293b] text-white shadow-md">
                 <tr className="h-12">
                   {[ { id: 'select', label: '' }, { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' }, { id: 'motorista', label: 'MOTORISTA' }, { id: 'placa', label: 'PLACA' }, { id: 'saida', label: 'SAÍDA' }, { id: 'motivo', label: 'MOTIVO' }, { id: 'observacao', label: 'OBSERVAÇÃO' }, { id: 'geral', label: 'GERAL' }, { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' } ].map(col => {
@@ -309,50 +307,56 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   })}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-300">
                 {filteredRoutes.map((route) => {
                   const alertClasses = getAlertStyles(route);
                   const isSelected = selectedIds.has(route.id);
-                  const rowBg = isSelected ? 'bg-primary-100/50' : 'bg-white hover:bg-slate-50';
-                  const textClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold text-slate-800 uppercase transition-all placeholder-slate-300";
+                  const rowBg = isSelected ? 'bg-primary-100/80' : alertClasses || 'bg-white hover:bg-slate-50';
+                  const inputClass = "w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold text-slate-800 uppercase transition-all placeholder-slate-400 focus:bg-white/50";
+                  const cellClass = "p-0 border border-slate-300 transition-all";
                   const isDelayed = route.statusOp === 'Atrasado';
 
                   return (
-                    <tr key={route.id} className={`${rowBg} ${alertClasses} group transition-all h-auto`}>
-                      <td className={`p-0 border-r border-slate-100 cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-primary-500' : 'hover:bg-slate-200'}`} onClick={() => toggleSelection(route.id)}></td>
-                      <td className="p-0 border-r border-slate-100"><input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${textClass} font-black text-primary-600`} /></td>
-                      <td className="p-0 border-r border-slate-100"><input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className={`${textClass} text-center text-slate-600`} /></td>
-                      <td className="p-0 border-r border-slate-100"><input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id, 'inicio', e.target.value)} className={`${textClass} font-mono text-center`} /></td>
-                      <td className="p-0 border-r border-slate-100"><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value)} className={`${textClass}`} /></td>
-                      <td className="p-0 border-r border-slate-100"><input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value)} className={`${textClass} font-mono text-center`} /></td>
-                      <td className="p-0 border-r border-slate-100"><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} className={`${textClass} font-mono text-center`} /></td>
-                      <td className="p-0 border-r border-slate-100">
+                    <tr key={route.id} className={`${rowBg} group transition-all h-auto`}>
+                      <td className={`${cellClass} border-r cursor-pointer transition-colors w-[35px] ${isSelected ? 'bg-primary-600' : 'hover:bg-slate-200'}`} onClick={() => toggleSelection(route.id)}></td>
+                      <td className={cellClass}><input type="text" value={route.rota} onChange={(e) => updateCell(route.id, 'rota', e.target.value)} className={`${inputClass} font-black text-primary-700`} /></td>
+                      <td className={cellClass}><input type="date" value={route.data} onChange={(e) => updateCell(route.id, 'data', e.target.value)} className={`${inputClass} text-center text-slate-600`} /></td>
+                      <td className={cellClass}><input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id, 'inicio', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
+                      <td className={cellClass}><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id, 'motorista', e.target.value)} className={`${inputClass}`} /></td>
+                      <td className={cellClass}><input type="text" value={route.placa} onChange={(e) => updateCell(route.id, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
+                      <td className={cellClass}><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id, 'saida', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
+                      <td className={cellClass}>
                         {isDelayed ? (
                           <div className="flex items-center justify-center h-full px-2">
-                              <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-slate-100 border-none rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 outline-none appearance-none text-center shadow-sm">
-                                  <option value="">Selecione...</option>{MOTIVOS.map(m => (<option key={m} value={m}>{m}</option>))}
+                              <select value={route.motivo} onChange={(e) => updateCell(route.id, 'motivo', e.target.value)} className="w-full bg-white/60 border border-slate-300 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 outline-none shadow-sm">
+                                  <option value="">Motivo...</option>{MOTIVOS.map(m => (<option key={m} value={m}>{m}</option>))}
                               </select>
                           </div>
                         ) : null}
                       </td>
-                      <td className="p-0 border-r border-slate-100 relative group/obs align-top h-full min-h-[44px]">
+                      <td className={`${cellClass} relative group/obs align-top h-full min-h-[44px]`}>
                         {isDelayed ? (
                           <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
-                            <textarea value={route.observacao || ""} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id)} placeholder="Observações..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-800 placeholder-slate-400 resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate pr-8'}`} style={{ height: isTextWrapEnabled ? 'auto' : '44px' }} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                            {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-primary-600 transition-colors opacity-40 group-hover/obs:opacity-100"><ChevronDown size={12} /></button>}
+                            <textarea value={route.observacao || ""} onChange={(e) => updateCell(route.id, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id)} placeholder="Obs..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal text-slate-800 placeholder-slate-500 resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal break-words leading-relaxed' : 'truncate pr-8'}`} style={{ height: isTextWrapEnabled ? 'auto' : '44px' }} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                            {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-primary-700 transition-colors opacity-60 group-hover/obs:opacity-100"><ChevronDown size={14} /></button>}
                           </div>
                         ) : null}
                         {activeObsId === route.id && (
-                          <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
-                            <div className="p-2 border-b border-slate-100 flex items-center justify-between"><span className="text-[8px] font-black uppercase text-slate-400">Modelos: {route.motivo}</span><X size={10} className="text-slate-400 cursor-pointer" onClick={() => setActiveObsId(null)} /></div>
-                            <div className="max-h-48 overflow-y-auto scrollbar-thin">{(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : []).map((template, tIdx) => ( <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-2 text-[10px] text-slate-600 hover:bg-primary-50 hover:text-primary-700 cursor-pointer transition-all border-b border-slate-50 last:border-0 flex items-center gap-2"><ChevronRight size={10} className="shrink-0" />{template}</div> ))}</div>
+                          <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white border border-slate-300 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
+                            <div className="p-2 border-b border-slate-100 flex justify-between items-center bg-slate-50"><span className="text-[9px] font-black uppercase text-slate-500">Modelos</span><X size={12} className="text-slate-400 cursor-pointer" onClick={() => setActiveObsId(null)} /></div>
+                            <div className="max-h-48 overflow-y-auto scrollbar-thin">{(route.motivo ? (OBSERVATION_TEMPLATES[route.motivo] || []) : []).map((template, tIdx) => ( <div key={tIdx} onClick={() => { updateCell(route.id, 'observacao', template); setActiveObsId(null); }} className="p-3 text-[10px] text-slate-700 hover:bg-primary-100 cursor-pointer border-b border-slate-100 flex items-center gap-2"><ChevronRight size={12} className="shrink-0 text-primary-500" />{template}</div> ))}</div>
                           </div>
                         )}
                       </td>
-                      <td className="p-0 border-r border-slate-100 align-middle"><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent border-none text-[10px] font-bold text-center appearance-none text-slate-700"><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
-                      <td className="p-1 border-r border-slate-100 text-center font-bold uppercase text-[9px] text-slate-500 align-middle">{route.operacao || "---"}</td>
-                      <td className="p-1 border-r border-slate-100 text-center align-middle"><span className={`px-2 py-1 rounded-full text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-50 border-emerald-100 text-emerald-600' : 'bg-red-50 border-red-100 text-red-600'}`}>{route.statusOp}</span></td>
-                      <td className="p-1 border-r border-slate-100 text-center font-mono font-bold text-[10px] text-slate-600 align-middle">{route.tempo}</td>
+                      <td className={cellClass}><select value={route.statusGeral} onChange={(e) => updateCell(route.id, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent border-none text-[10px] font-bold text-center appearance-none text-slate-800"><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
+                      <td className={`${cellClass} bg-slate-50/50`}>
+                          <select value={route.operacao} onChange={(e) => updateCell(route.id, 'operacao', e.target.value)} className="w-full h-full bg-transparent border-none text-[9px] font-black text-center text-slate-600 uppercase">
+                              <option value="">OP...</option>
+                              {userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}
+                          </select>
+                      </td>
+                      <td className={`${cellClass} text-center`}><span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : 'bg-red-100 border-red-400 text-red-800'}`}>{route.statusOp}</span></td>
+                      <td className={`${cellClass} text-center font-mono font-bold text-[10px] text-slate-700`}>{route.tempo}</td>
                     </tr>
                   );
                 })}
@@ -364,9 +368,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       {isStatsModalOpen && dashboardStats && (
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[200] flex items-center justify-center p-6">
             <div className="bg-white border border-slate-200 rounded-[2rem] shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in duration-300">
-                <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><div className="p-2.5 bg-white/10 rounded-xl"><TrendingUp size={24} /></div><div><h3 className="font-black uppercase tracking-widest text-base leading-none">Dashboard</h3></div></div><button onClick={() => setIsStatsModalOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-all"><X size={28} /></button></div>
-                <div className="p-8 flex-1 overflow-y-auto space-y-8 scrollbar-thin bg-slate-50">
-                    <div className="grid grid-cols-4 gap-6">{[{ label: 'Total', value: dashboardStats.total, icon: Activity, color: 'text-slate-700 bg-white' }, { label: 'OK', value: `${Math.round((dashboardStats.okCount / dashboardStats.total) * 100)}%`, icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' }, { label: 'Atrasos', value: `${Math.round((dashboardStats.delayedCount / dashboardStats.total) * 100)}%`, icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' }].map((stat, idx) => ( <div key={idx} className={`p-6 rounded-2xl border border-slate-200 flex flex-col gap-2 ${stat.color}`}><stat.icon size={20} /><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">{stat.label}</span><div className="text-3xl font-black">{stat.value}</div></div> ))}</div>
+                <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><div className="p-2.5 bg-white/10 rounded-xl"><TrendingUp size={24} /></div><h3 className="font-black uppercase tracking-widest text-base">Dashboard Operacional</h3></div><button onClick={() => setIsStatsModalOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-all"><X size={28} /></button></div>
+                <div className="p-8 flex-1 overflow-y-auto space-y-8 bg-slate-50">
+                    <div className="grid grid-cols-4 gap-6">{[{ label: 'Total', value: dashboardStats.total, icon: Activity, color: 'text-slate-700 bg-white' }, { label: 'OK', value: `${Math.round((dashboardStats.okCount / dashboardStats.total) * 100)}%`, icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' }, { label: 'Atrasos', value: `${Math.round((dashboardStats.delayedCount / dashboardStats.total) * 100)}%`, icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' }].map((stat, idx) => ( <div key={idx} className={`p-6 rounded-2xl border border-slate-200 flex flex-col gap-2 ${stat.color}`}><stat.icon size={20} /><span className="text-[10px] font-black uppercase text-slate-400 mt-2">{stat.label}</span><div className="text-3xl font-black">{stat.value}</div></div> ))}</div>
                 </div>
             </div>
         </div>
@@ -374,9 +378,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       {isImportModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
-             <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in duration-200">
-                <div className="bg-emerald-500 p-6 flex justify-between items-center text-white"><div className="flex items-center gap-3"><Upload size={20} /><h3 className="font-black uppercase tracking-widest text-xs">Importação</h3></div><button onClick={() => setIsImportModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg"><X size={20} /></button></div>
-                <div className="p-8"><textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-5 border-2 border-slate-100 rounded-2xl bg-slate-50 text-[11px] font-mono mb-6 outline-none shadow-inner scrollbar-thin" placeholder="Cole os dados aqui..." /><button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="w-full py-4 bg-emerald-500 text-white font-black uppercase tracking-widest text-[11px] rounded-xl shadow-lg transition-all hover:bg-emerald-600 disabled:opacity-50">{isProcessingImport ? <Loader2 size={18} className="animate-spin" /> : <span>Processar Importação</span>}</button></div>
+             <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in">
+                <div className="bg-emerald-600 p-6 flex justify-between items-center text-white font-black uppercase tracking-widest text-xs"><div className="flex items-center gap-3"><Upload size={20} /> Importar Excel</div><button onClick={() => setIsImportModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg"><X size={20} /></button></div>
+                <div className="p-8"><textarea value={importText} onChange={e => setImportText(e.target.value)} className="w-full h-64 p-5 border-2 border-slate-100 rounded-2xl bg-slate-50 text-[11px] font-mono mb-6 outline-none shadow-inner" placeholder="Cole as linhas do Excel aqui..." /><button onClick={handleImport} disabled={isProcessingImport || !importText.trim()} className="w-full py-4 bg-emerald-600 text-white font-black uppercase text-[11px] rounded-xl transition-all hover:bg-emerald-700 shadow-lg disabled:opacity-50">{isProcessingImport ? <Loader2 className="animate-spin" /> : 'Processar Agora'}</button></div>
              </div>
         </div>
       )}
@@ -384,18 +388,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[200] flex items-center justify-center p-4">
           <div className="bg-white border border-slate-200 rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden animate-in zoom-in">
-            <div className="bg-primary-600 text-white p-6 flex justify-between items-center"><h3 className="font-black uppercase tracking-widest text-xs flex items-center gap-3"><Plus size={20} /> Novo Registro</h3><button onClick={() => setIsModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg"><X size={20} /></button></div>
+            <div className="bg-primary-600 text-white p-6 flex justify-between items-center font-black uppercase text-xs"><div className="flex items-center gap-3"><Plus size={20} /> Nova Rota</div><button onClick={() => setIsModalOpen(false)} className="hover:bg-white/10 p-1.5 rounded-lg"><X size={20} /></button></div>
             <form onSubmit={handleSubmit} className="p-8 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Data</label><input type="date" required value={formData.data} onChange={e => setFormData({...formData, data: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none focus:border-primary-600 transition-all"/></div>
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rota</label><input type="text" required value={formData.rota} onChange={e => setFormData({...formData, rota: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-[11px] font-black text-primary-600 outline-none focus:border-primary-600 transition-all"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Data</label><input type="date" required value={formData.data} onChange={e => setFormData({...formData, data: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Rota</label><input type="text" required value={formData.rota} onChange={e => setFormData({...formData, rota: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-[11px] font-black text-primary-600 outline-none"/></div>
                 </div>
-                <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Operação</label><select required value={formData.operacao} onChange={e => setFormData({...formData, operacao: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-[11px] font-black text-slate-700 outline-none focus:border-primary-600"><option value="">Selecione...</option>{userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}</select></div>
+                <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Operação</label><select required value={formData.operacao} onChange={e => setFormData({...formData, operacao: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-[11px] font-black text-slate-700 outline-none"><option value="">Selecione...</option>{userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}</select></div>
                 <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Motorista</label><input type="text" required value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none focus:border-primary-600 transition-all"/></div>
-                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Placa</label><input type="text" required value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value})} className="w-full p-3 border border-slate-100 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-black outline-none focus:border-primary-600 transition-all"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Motorista</label><input type="text" required value={formData.motorista} onChange={e => setFormData({...formData, motorista: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-slate-800 text-[11px] font-bold outline-none"/></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase">Placa</label><input type="text" required value={formData.placa} onChange={e => setFormData({...formData, placa: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl bg-slate-50 text-[11px] font-black outline-none"/></div>
                 </div>
-                <button type="submit" disabled={isSyncing} className="w-full py-4 bg-primary-600 hover:bg-primary-700 text-white font-black uppercase tracking-widest text-[11px] rounded-xl flex items-center justify-center gap-2 shadow-xl transition-all mt-4">{isSyncing ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} SALVAR NO SHAREPOINT</button>
+                <button type="submit" disabled={isSyncing} className="w-full py-4 bg-primary-600 hover:bg-primary-700 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 shadow-xl transition-all mt-4">{isSyncing ? <Loader2 className="animate-spin" /> : <Save size={16} />} SALVAR AGORA</button>
             </form>
           </div>
         </div>

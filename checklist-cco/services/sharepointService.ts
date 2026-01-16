@@ -27,8 +27,12 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     } catch(e) { 
         errDetail = await res.text(); 
     }
-    // Log de erro detalhado para depuração
-    console.error(`[GRAPH_ERROR] Endpoint: ${endpoint} | Status: ${res.status} | Msg: ${errDetail}`);
+    // Log crítico para debug em produção
+    console.error(`[GRAPH_ERROR] Falha na chamada API!
+      Endpoint: ${endpoint}
+      Status: ${res.status}
+      Detalhe do SharePoint: ${errDetail}
+    `);
     throw new Error(errDetail);
   }
   return res.status === 204 ? null : res.json();
@@ -51,7 +55,7 @@ async function findListByIdOrName(siteId: string, listName: string, token: strin
     );
     if (found) return found;
   }
-  throw new Error(`Lista '${listName}' não encontrada no SharePoint.`);
+  throw new Error(`Lista '${listName}' não encontrada no site.`);
 }
 
 function normalizeString(str: string): string {
@@ -302,12 +306,12 @@ export const SharePointService = {
   },
 
   async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number }> {
-    console.log(`[SP_SERVICE] Iniciando arquivamento de ${items.length} itens.`);
+    console.log(`[SP_SERVICE] Iniciando arquivamento atômico de ${items.length} itens.`);
     const siteId = await getResolvedSiteId(token);
     const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
-    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
     
-    console.log(`[SP_SERVICE] Lista de Destino (History): ${historyListId}`);
+    // GUID LIMPO: Sem encoded chars
+    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
     
     const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
     
@@ -316,7 +320,7 @@ export const SharePointService = {
 
     for (const item of items) {
         try {
-            console.log(`[SP_SERVICE] Processando Rota: ${item.rota} (ID: ${item.id})`);
+            console.log(`[SP_SERVICE] Preparando item: ${item.rota}`);
             
             const raw: any = {
                 Title: item.rota,
@@ -341,7 +345,7 @@ export const SharePointService = {
                 if (histInternals.has(int)) histFields[int] = raw[k];
             });
 
-            console.log(`[SP_SERVICE] Payload POST para histórico:`, JSON.stringify(histFields));
+            console.log('[DEBUG PAYLOAD]', JSON.stringify(histFields));
 
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, {
                 method: 'POST',
@@ -349,22 +353,21 @@ export const SharePointService = {
             });
 
             if (postRes && postRes.id) {
-                console.log(`[SP_SERVICE] Sucesso no arquivamento. Deletando original...`);
+                console.log(`[SP_SERVICE] POST concluído. Deletando original ID ${item.id}...`);
                 await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, {
                     method: 'DELETE'
                 });
                 successCount++;
             } else {
-                console.warn(`[SP_SERVICE] Falha ao criar registro no histórico para rota ${item.rota}. Item não deletado.`);
                 failedCount++;
             }
         } catch (err: any) {
-            console.error(`[SP_SERVICE] Erro crítico ao arquivar item ${item.rota}:`, err.message);
+            console.error(`[SP_SERVICE] Erro no item ${item.rota}:`, err.message);
             failedCount++;
         }
     }
 
-    console.log(`[SP_SERVICE] Arquivamento Finalizado. Sucessos: ${successCount}, Falhas: ${failedCount}`);
+    console.log(`[SP_SERVICE] Arquivamento Finalizado. S: ${successCount}, F: ${failedCount}`);
     return { success: successCount, failed: failedCount };
   }
 };
