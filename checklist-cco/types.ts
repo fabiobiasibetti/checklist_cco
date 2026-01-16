@@ -1,4 +1,5 @@
 
+
 export type OperationStatus = 'PR' | 'OK' | 'EA' | 'AR' | 'ATT' | 'AT';
 
 export interface OperationStates {
@@ -60,6 +61,16 @@ export interface RouteOperationMapping {
   id: string;
   Title: string; // Nome/Número da Rota
   OPERACAO: string; // Sigla da Operação
+}
+
+/**
+ * Interface defining route configuration parameters such as operation ID,
+ * user email for filtering, and the allowed delay tolerance.
+ */
+export interface RouteConfig {
+  operacao: string;
+  email: string;
+  tolerancia: string;
 }
 
 export interface SPTask {

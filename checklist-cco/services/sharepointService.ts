@@ -27,12 +27,7 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
     } catch(e) { 
         errDetail = await res.text(); 
     }
-    // Log pesado no console para debug rápido
-    console.error(`[SHAREPOINT_API_FAILURE]
-      URL: ${url}
-      STATUS: ${res.status}
-      ERROR: ${errDetail}
-    `);
+    console.error(`[SHAREPOINT_API_FAILURE] URL: ${url} STATUS: ${res.status} ERROR: ${errDetail}`);
     throw new Error(errDetail);
   }
   return res.status === 204 ? null : res.json();
@@ -282,6 +277,35 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
+  async getArchivedDepartures(token: string, operation: string, startDate: string, endDate: string): Promise<RouteDeparture[]> {
+    try {
+      const siteId = await getResolvedSiteId(token);
+      const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
+      const { mapping } = await getListColumnMapping(siteId, historyListId, token);
+      
+      const colData = resolveFieldName(mapping, 'DataOperacao');
+      const colOp = resolveFieldName(mapping, 'Operacao');
+      
+      let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
+      if (operation) {
+          filter += ` and fields/${colOp} eq '${operation}'`;
+      }
+
+      console.log(`[ARCHIVE_QUERY] Filter: ${filter}`);
+      const data = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=999`, token);
+      
+      return (data.value || []).map((item: any) => {
+        const f = item.fields;
+        return {
+          id: String(item.id), semana: f[resolveFieldName(mapping, 'Semana')] || "", rota: f.Title || "", data: f[colData] ? f[colData].split('T')[0] : "", inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", motorista: f[resolveFieldName(mapping, 'Motorista')] || "", placa: f[resolveFieldName(mapping, 'Placa')] || "", saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", observacao: f[resolveFieldName(mapping, 'Observacao')] || "", statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", operacao: f[colOp] || "", statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", tempo: f[resolveFieldName(mapping, 'TempoGap')] || "OK", createdAt: f.Created || new Date().toISOString()
+        };
+      });
+    } catch (e: any) {
+        console.error("[ARCHIVE_FETCH_ERROR]", e.message);
+        return [];
+    }
+  },
+
   async updateDeparture(token: string, departure: RouteDeparture): Promise<string> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
@@ -309,10 +333,7 @@ export const SharePointService = {
     console.log(`[ARCHIVE_START] Iniciando migração de ${items.length} itens.`);
     const siteId = await getResolvedSiteId(token);
     const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
-    
-    // GUID LIMPO: Removendo caracteres indesejados caso existam
-    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8".replace(/[{}]/g, "");
-    
+    const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
     const { mapping: histMapping, internalNames: histInternals } = await getListColumnMapping(siteId, historyListId, token);
     
     let successCount = 0;
@@ -321,56 +342,16 @@ export const SharePointService = {
 
     for (const item of items) {
         try {
-            console.log(`[ARCHIVE_PROCESS] Preparando: ${item.rota} (ID: ${item.id})`);
-            
-            const raw: any = {
-                Title: item.rota,
-                Semana: item.semana,
-                DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null,
-                HorarioInicio: item.inicio,
-                Motorista: item.motorista,
-                Placa: item.placa,
-                HorarioSaida: item.saida,
-                MotivoAtraso: item.motivo,
-                Observacao: item.observacao,
-                StatusGeral: item.statusGeral,
-                Aviso: item.aviso,
-                Operacao: item.operacao,
-                StatusOp: item.statusOp,
-                TempoGap: item.tempo
-            };
-
+            const raw: any = { Title: item.rota, Semana: item.semana, DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: item.inicio, Motorista: item.motorista, Placa: item.placa, HorarioSaida: item.saida, MotivoAtraso: item.motivo, Observacao: item.observacao, StatusGeral: item.statusGeral, Aviso: item.aviso, Operacao: item.operacao, StatusOp: item.statusOp, TempoGap: item.tempo };
             const histFields: any = {};
-            Object.keys(raw).forEach(k => {
-                const int = resolveFieldName(histMapping, k);
-                if (histInternals.has(int)) histFields[int] = raw[k];
-            });
-
-            console.log('[DEBUG_PAYLOAD_POST]', JSON.stringify(histFields));
-
-            const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, {
-                method: 'POST',
-                body: JSON.stringify({ fields: histFields })
-            });
-
+            Object.keys(raw).forEach(k => { const int = resolveFieldName(histMapping, k); if (histInternals.has(int)) histFields[int] = raw[k]; });
+            const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
             if (postRes && postRes.id) {
-                console.log(`[ARCHIVE_SUCCESS] Registro criado no histórico. Removendo original...`);
-                await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, {
-                    method: 'DELETE'
-                });
+                await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, { method: 'DELETE' });
                 successCount++;
-            } else {
-                failedCount++;
-                lastErrorMessage = "Resposta da API sem ID de confirmação.";
-            }
-        } catch (err: any) {
-            console.error(`[ARCHIVE_ERROR] Erro na rota ${item.rota}:`, err.message);
-            failedCount++;
-            lastErrorMessage = err.message;
-        }
+            } else { failedCount++; lastErrorMessage = "Sem confirmação ID."; }
+        } catch (err: any) { failedCount++; lastErrorMessage = err.message; }
     }
-
-    console.log(`[ARCHIVE_FINISH] Sucesso: ${successCount}, Falhas: ${failedCount}`);
     return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
   }
 };
