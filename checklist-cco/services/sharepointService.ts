@@ -1,6 +1,16 @@
 
 import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping } from '../types';
 
+export interface DailyWarning {
+  id: string;
+  operacao: string; // Título
+  celula: string;   // Email do responsável
+  rota: string;
+  descricao: string;
+  dataOcorrencia: string; // ISO Date
+  visualizado: boolean;
+}
+
 const SITE_PATH = "vialacteoscombr.sharepoint.com:/sites/CCO";
 let cachedSiteId: string | null = null;
 const columnMappingCache: Record<string, { mapping: Record<string, string>, readOnly: Set<string>, internalNames: Set<string> }> = {};
@@ -82,7 +92,10 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
 
 function resolveFieldName(mapping: Record<string, string>, target: string): string {
   const normalized = normalizeString(target);
-  if (normalized === 'titulo' || normalized === 'rota') return 'Title';
+  if (normalized === 'titulo' || normalized === 'rota') {
+      // Prioridade para Title se for especificamente a coluna de nome Title mas o alvo for 'rota' ou 'titulo'
+      if (mapping['title']) return 'Title';
+  }
   return mapping[normalized] || target;
 }
 
@@ -90,7 +103,7 @@ export const SharePointService = {
   async getAllListsMetadata(token: string): Promise<any[]> {
     try {
       const siteId = await getResolvedSiteId(token);
-      const listsToExplore = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco', 'CONFIG_SAIDA_DE_ROTAS', 'Dados_Saida_de_rotas', 'Rotas_Operacao_Checklist'];
+      const listsToExplore = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco', 'CONFIG_SAIDA_DE_ROTAS', 'Dados_Saida_de_rotas', 'Rotas_Operacao_Checklist', 'avisos_diarios_checklist'];
       const results = await Promise.all(listsToExplore.map(async (listName) => {
         try {
           const list = await findListByIdOrName(siteId, listName, token);
@@ -353,5 +366,73 @@ export const SharePointService = {
         } catch (err: any) { failedCount++; lastErrorMessage = err.message; }
     }
     return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
+  },
+
+  // MÉTODOS PARA AVISOS DIÁRIOS
+  async addDailyWarning(token: string, warning: Omit<DailyWarning, 'id' | 'visualizado'>): Promise<void> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, 'avisos_diarios_checklist', token);
+    const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
+    
+    const raw: any = {
+        Title: warning.operacao,
+        celula: warning.celula,
+        rota: warning.rota,
+        descricao: warning.descricao,
+        data_referencia: new Date(warning.dataOcorrencia).toISOString(),
+        visualizado: false
+    };
+
+    const fields: any = {};
+    Object.keys(raw).forEach(k => {
+        const int = resolveFieldName(mapping, k);
+        if (internalNames.has(int)) fields[int] = raw[k];
+    });
+
+    await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
+  },
+
+  async getDailyWarnings(token: string, userEmail: string): Promise<DailyWarning[]> {
+    try {
+        const siteId = await getResolvedSiteId(token);
+        const list = await findListByIdOrName(siteId, 'avisos_diarios_checklist', token);
+        const { mapping } = await getListColumnMapping(siteId, list.id, token);
+        
+        const celulaCol = resolveFieldName(mapping, 'celula');
+        const visualizadoCol = resolveFieldName(mapping, 'visualizado');
+        const rotaCol = resolveFieldName(mapping, 'rota');
+        const descCol = resolveFieldName(mapping, 'descricao');
+        const dataCol = resolveFieldName(mapping, 'data_referencia');
+
+        // Filtra apenas não visualizados para o usuário específico
+        const filter = `fields/${celulaCol} eq '${userEmail.trim()}' and fields/${visualizadoCol} eq 0`;
+        const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
+        
+        return (data.value || []).map((item: any) => {
+            const f = item.fields;
+            return {
+                id: String(item.id),
+                operacao: f.Title || "",
+                celula: f[celulaCol] || "",
+                rota: f[rotaCol] || "",
+                descricao: f[descCol] || "",
+                dataOcorrencia: f[dataCol] || "",
+                visualizado: Boolean(f[visualizadoCol])
+            };
+        });
+    } catch (e) {
+        console.error("Erro ao carregar avisos:", e);
+        return [];
+    }
+  },
+
+  async markWarningAsViewed(token: string, id: string): Promise<void> {
+    const siteId = await getResolvedSiteId(token);
+    const list = await findListByIdOrName(siteId, 'avisos_diarios_checklist', token);
+    const { mapping } = await getListColumnMapping(siteId, list.id, token);
+    const visualizadoCol = resolveFieldName(mapping, 'visualizado');
+    
+    const fields: any = { [visualizadoCol]: true };
+    await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
   }
 };

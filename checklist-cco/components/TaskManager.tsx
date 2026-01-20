@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, OperationStatus, User } from '../types';
-import { SharePointService } from '../services/sharepointService';
+import { SharePointService, DailyWarning } from '../services/sharepointService';
 import { 
   Maximize2, Minimize2, Loader2, Database, 
   ShieldCheck, AlertCircle, RefreshCw, CheckCircle,
   Activity, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
-  RotateCcw, Save, UserCheck
+  RotateCcw, Save, UserCheck, Bell, MessageSquarePlus, Megaphone,
+  Clock
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string, color: string, next: OperationStatus, shortcut: string, desc: string }> = {
@@ -45,6 +46,14 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   const [isUpdating, setIsUpdating] = useState(false);
   const [compact, setCompact] = useState(true);
   
+  // Estados para Avisos Diários
+  const [dailyWarnings, setDailyWarnings] = useState<DailyWarning[]>([]);
+  const [isCreateWarningModalOpen, setIsCreateWarningModalOpen] = useState(false);
+  const [isViewWarningsModalOpen, setIsViewWarningsModalOpen] = useState(false);
+  const [newWarning, setNewWarning] = useState<Omit<DailyWarning, 'id' | 'visualizado'>>({
+      operacao: '', celula: currentUser.email, rota: '', descricao: '', dataOcorrencia: new Date().toISOString().split('T')[0]
+  });
+
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetResponsible, setResetResponsible] = useState('');
   const [registeredUsers, setRegisteredUsers] = useState<string[]>([]);
@@ -55,6 +64,49 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   
   const autoCollapsedSessionRef = useRef<Set<string>>(new Set());
   const manuallyOpenedRef = useRef<Set<string>>(new Set());
+
+  const fetchWarnings = async () => {
+    const token = currentUser.accessToken || (window as any).__access_token;
+    if (token) {
+        const warnings = await SharePointService.getDailyWarnings(token, currentUser.email);
+        setDailyWarnings(warnings);
+        if (warnings.length > 0) setIsViewWarningsModalOpen(true);
+    }
+  };
+
+  useEffect(() => {
+      fetchWarnings();
+      const interval = setInterval(fetchWarnings, 300000); // 5 min interval
+      return () => clearInterval(interval);
+  }, [currentUser]);
+
+  const handleAddWarning = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = currentUser.accessToken || (window as any).__access_token;
+    if (!token) return;
+    setIsUpdating(true);
+    try {
+        await SharePointService.addDailyWarning(token, newWarning);
+        setIsCreateWarningModalOpen(false);
+        setNewWarning({ operacao: '', celula: currentUser.email, rota: '', descricao: '', dataOcorrencia: new Date().toISOString().split('T')[0] });
+        alert("Aviso registrado com sucesso!");
+    } catch (err: any) {
+        alert("Erro ao salvar aviso: " + err.message);
+    } finally {
+        setIsUpdating(false);
+    }
+  };
+
+  const handleMarkAsViewed = async (id: string) => {
+      const token = currentUser.accessToken || (window as any).__access_token;
+      if (!token) return;
+      try {
+          await SharePointService.markWarningAsViewed(token, id);
+          setDailyWarnings(prev => prev.filter(w => w.id !== id));
+      } catch (err: any) {
+          console.error("Erro ao marcar como lido:", err);
+      }
+  };
 
   const getCategoryStats = (category: string) => {
     const catTasks = tasks.filter(t => (t.category || 'Geral') === category);
@@ -290,6 +342,16 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-2xl border dark:border-slate-800 shadow-sm overflow-hidden relative font-sans transition-colors duration-500">
+      
+      {/* BADGE DE AVISOS PENDENTES */}
+      {dailyWarnings.length > 0 && (
+          <div onClick={() => setIsViewWarningsModalOpen(true)} className="bg-orange-500 hover:bg-orange-600 transition-colors text-white px-4 py-2 flex items-center justify-center gap-3 cursor-pointer shadow-lg z-[60]">
+              <Megaphone size={16} className="animate-bounce" />
+              <span className="text-[10px] font-black uppercase tracking-widest">Atenção: Você possui {dailyWarnings.length} aviso(s) operacional(is) pendente(s)</span>
+              <ChevronRight size={14} />
+          </div>
+      )}
+
       {/* HEADER / TOOLBAR */}
       <div className="px-4 py-3 border-b dark:border-slate-800 flex flex-col xl:flex-row justify-between items-center bg-gray-50/80 dark:bg-slate-800/80 backdrop-blur-md gap-3 shrink-0 z-50">
         <div className="flex items-center gap-4">
@@ -335,9 +397,19 @@ const TaskManager: React.FC<TaskManagerProps> = ({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* NOVO BOTÃO DE ADICIONAR AVISO */}
+            <button 
+              onClick={() => setIsCreateWarningModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-all border border-blue-100 dark:border-blue-800 shadow-sm"
+              title="Adicionar Aviso Operacional"
+            >
+              <MessageSquarePlus size={18} />
+              <span className="text-xs font-bold hidden sm:inline">Aviso</span>
+            </button>
+
             <button 
               onClick={handleOpenResetModal}
-              className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-all border border-amber-100 dark:border-amber-800 shadow-sm"
+              className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-all border border-blue-100 dark:border-blue-800 shadow-sm"
               title="Resetar Checklist e Salvar no SharePoint"
             >
               <RotateCcw size={18} />
@@ -353,6 +425,134 @@ const TaskManager: React.FC<TaskManagerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* MODAL DE LEITURA DE AVISOS */}
+      {isViewWarningsModalOpen && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[110] flex items-center justify-center p-4 animate-in zoom-in duration-300">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-orange-500/30">
+                  <div className="bg-orange-600 text-white p-6 flex justify-between items-center">
+                      <div className="flex items-center gap-4">
+                          <Bell size={32} className="animate-pulse" />
+                          <div>
+                              <h3 className="text-xl font-black uppercase tracking-tight">Avisos Operacionais do Dia</h3>
+                              <p className="text-xs text-orange-200 font-bold uppercase tracking-widest">Favor revisar e acusar recebimento</p>
+                          </div>
+                      </div>
+                      <button onClick={() => setIsViewWarningsModalOpen(false)} className="hover:bg-white/10 p-2 rounded-full transition-all">
+                          <X size={24} />
+                      </button>
+                  </div>
+                  <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4 bg-slate-50 dark:bg-slate-950 scrollbar-thin">
+                      {dailyWarnings.length === 0 ? (
+                          <div className="py-12 text-center text-slate-400 italic">Nenhum aviso pendente.</div>
+                      ) : dailyWarnings.map(warning => (
+                          <div key={warning.id} className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800 shadow-sm group hover:border-orange-500 transition-all">
+                              <div className="flex justify-between items-start mb-4">
+                                  <div>
+                                      <span className="px-3 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-[10px] font-black rounded-full uppercase mb-2 inline-block">
+                                          Operação: {warning.operacao}
+                                      </span>
+                                      <h4 className="text-lg font-black text-slate-800 dark:text-white uppercase">Rota: {warning.rota}</h4>
+                                  </div>
+                                  <button 
+                                    onClick={() => handleMarkAsViewed(warning.id)}
+                                    className="p-3 bg-green-500 hover:bg-green-600 text-white rounded-2xl shadow-lg transition-all flex items-center gap-2 group-hover:scale-105 active:scale-95"
+                                  >
+                                      <CheckCircle2 size={18} />
+                                      <span className="text-[10px] font-black uppercase">Ciente</span>
+                                  </button>
+                              </div>
+                              <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed font-medium bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-100 dark:border-slate-700">
+                                  {warning.descricao}
+                              </p>
+                              <div className="mt-4 flex items-center gap-2 text-[9px] text-slate-400 font-bold uppercase tracking-widest">
+                                  <Clock size={12} /> Data Ocorrência: {new Date(warning.dataOcorrencia).toLocaleDateString('pt-BR')}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+                  <div className="p-6 bg-white dark:bg-slate-900 border-t dark:border-slate-800 text-center">
+                      <button onClick={() => setIsViewWarningsModalOpen(false)} className="px-8 py-3 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 rounded-xl font-black uppercase text-[10px] hover:bg-slate-200 transition-all tracking-widest">Fechar Painel</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* MODAL DE CRIAÇÃO DE AVISO */}
+      {isCreateWarningModalOpen && (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[110] flex items-center justify-center p-4 animate-in fade-in duration-200">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl w-full max-w-lg overflow-hidden border dark:border-slate-700">
+                  <div className="bg-blue-600 text-white p-6 flex justify-between items-center">
+                      <div className="flex items-center gap-3">
+                          <MessageSquarePlus size={24} />
+                          <h3 className="text-lg font-black uppercase tracking-tight">Novo Aviso Operacional</h3>
+                      </div>
+                      <button onClick={() => setIsCreateWarningModalOpen(false)}><X size={24}/></button>
+                  </div>
+                  <form onSubmit={handleAddWarning} className="p-8 space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase">Operação</label>
+                              <select 
+                                required
+                                value={newWarning.operacao}
+                                onChange={e => setNewWarning({...newWarning, operacao: e.target.value})}
+                                className="w-full p-3 border dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 dark:text-white text-[11px] font-bold outline-none"
+                              >
+                                  <option value="">Selecione...</option>
+                                  {locations.map(loc => (
+                                      <option key={loc} value={loc}>{loc}</option>
+                                  ))}
+                              </select>
+                          </div>
+                          <div className="space-y-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase">Rota</label>
+                              <input 
+                                required
+                                type="text"
+                                placeholder="Ex: 001 ou ROTA X"
+                                value={newWarning.rota}
+                                onChange={e => setNewWarning({...newWarning, rota: e.target.value})}
+                                className="w-full p-3 border dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 dark:text-white text-[11px] font-bold outline-none"
+                              />
+                          </div>
+                      </div>
+                      <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase">Data da Ocorrência</label>
+                          <input 
+                            required
+                            type="date"
+                            value={newWarning.dataOcorrencia}
+                            onChange={e => setNewWarning({...newWarning, dataOcorrencia: e.target.value})}
+                            className="w-full p-3 border dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 dark:text-white text-[11px] font-bold outline-none"
+                          />
+                      </div>
+                      <div className="space-y-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase">Descrição da Ocorrência</label>
+                          <textarea 
+                            required
+                            rows={4}
+                            placeholder="Descreva detalhadamente o ocorrido..."
+                            value={newWarning.descricao}
+                            onChange={e => setNewWarning({...newWarning, descricao: e.target.value})}
+                            className="w-full p-4 border dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-800 dark:text-white text-[11px] font-medium outline-none resize-none"
+                          />
+                      </div>
+                      <div className="pt-4 flex gap-3">
+                          <button type="button" onClick={() => setIsCreateWarningModalOpen(false)} className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-xl font-black uppercase text-[10px] tracking-widest">Cancelar</button>
+                          <button 
+                            type="submit" 
+                            disabled={isUpdating}
+                            className="flex-[2] py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                          >
+                              {isUpdating ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                              Salvar no SharePoint
+                          </button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
 
       {/* RESET MODAL */}
       {isResetModalOpen && (
