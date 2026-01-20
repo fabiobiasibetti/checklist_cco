@@ -374,19 +374,19 @@ export const SharePointService = {
     const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
     
     // Mapeamento manual de segurança e conversão para strings (coluna Texto no SharePoint)
+    // FIX: Usando warning.dataOcorrencia + T12:00:00Z para evitar erro de fuso
     const raw: any = {
         Title: warning.operacao || 'SEM OPERACAO',
         celula: warning.celula,
         rota: warning.rota,
         descricao: warning.descricao,
-        data_referencia: new Date(warning.dataOcorrencia).toISOString(),
-        visualizado: "false" // Coluna é Texto, enviando como string para evitar erro
+        data_referencia: new Date(warning.dataOcorrencia + 'T12:00:00Z').toISOString(),
+        visualizado: "false" 
     };
 
     const fields: any = {};
     Object.keys(raw).forEach(k => {
         const int = resolveFieldName(mapping, k);
-        // Fallback: se o resolveFieldName não encontrar mapeamento, tenta o nome original se existir na lista
         if (internalNames.has(int)) {
             fields[int] = raw[k];
         } else if (internalNames.has(k)) {
@@ -394,7 +394,6 @@ export const SharePointService = {
         }
     });
 
-    // Garante que Title está preenchido
     if (!fields['Title']) fields['Title'] = raw.Title;
 
     console.log('[DEBUG WARNING] Final Payload Fields:', JSON.stringify(fields, null, 2));
@@ -422,7 +421,7 @@ export const SharePointService = {
         const descCol = resolveFieldName(mapping, 'descricao');
         const dataCol = resolveFieldName(mapping, 'data_referencia');
 
-        // Como a coluna é Texto, filtramos pela string 'false' em vez de boolean 0
+        // FIX: Mantemos o filtro apenas em visualizado e celula para garantir que avisos não lidos apareçam sempre
         const filter = `fields/${celulaCol} eq '${userEmail.trim()}' and fields/${visualizadoCol} eq 'false'`;
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
         
@@ -450,7 +449,7 @@ export const SharePointService = {
     const { mapping } = await getListColumnMapping(siteId, list.id, token);
     const visualizadoCol = resolveFieldName(mapping, 'visualizado');
     
-    const fields: any = { [visualizadoCol]: "true" }; // Enviando como string para coluna tipo Texto
+    const fields: any = { [visualizadoCol]: "true" }; 
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
   }
 };

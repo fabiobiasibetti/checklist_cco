@@ -8,7 +8,7 @@ import {
   Activity, Lock, CheckCircle2, PaintBucket,
   HelpCircle, X, LogOut, ChevronDown, ChevronRight,
   RotateCcw, Save, UserCheck, Bell, MessageSquarePlus, Megaphone,
-  Clock
+  Clock, Check
 } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string, color: string, next: OperationStatus, shortcut: string, desc: string }> = {
@@ -70,13 +70,17 @@ const TaskManager: React.FC<TaskManagerProps> = ({
     if (token) {
         const warnings = await SharePointService.getDailyWarnings(token, currentUser.email);
         setDailyWarnings(warnings);
-        if (warnings.length > 0) setIsViewWarningsModalOpen(true);
+        // FIX: Auto-open modal if there are pending warnings
+        if (warnings.length > 0) {
+            setIsViewWarningsModalOpen(true);
+        }
     }
   };
 
   useEffect(() => {
       fetchWarnings();
-      const interval = setInterval(fetchWarnings, 300000); // 5 min interval
+      // Re-busca a cada 5 minutos para ver se há novos avisos de outros usuários
+      const interval = setInterval(fetchWarnings, 300000); 
       return () => clearInterval(interval);
   }, [currentUser]);
 
@@ -102,9 +106,15 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       if (!token) return;
       try {
           await SharePointService.markWarningAsViewed(token, id);
+          // Remove localmente para feedback imediato
           setDailyWarnings(prev => prev.filter(w => w.id !== id));
+          // Se não houver mais avisos, fecha o modal sozinho
+          if (dailyWarnings.length <= 1) {
+              setIsViewWarningsModalOpen(false);
+          }
       } catch (err: any) {
           console.error("Erro ao marcar como lido:", err);
+          alert("Não foi possível marcar como lido no servidor.");
       }
   };
 
@@ -397,7 +407,6 @@ const TaskManager: React.FC<TaskManagerProps> = ({
           </div>
 
           <div className="flex items-center gap-1">
-            {/* NOVO BOTÃO DE ADICIONAR AVISO */}
             <button 
               onClick={() => setIsCreateWarningModalOpen(true)}
               className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-all border border-blue-100 dark:border-blue-800 shadow-sm"
@@ -409,7 +418,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
 
             <button 
               onClick={handleOpenResetModal}
-              className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-all border border-blue-100 dark:border-blue-800 shadow-sm"
+              className="flex items-center gap-2 px-3 py-2 bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-xl hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-all border border-amber-100 dark:border-amber-800 shadow-sm"
               title="Resetar Checklist e Salvar no SharePoint"
             >
               <RotateCcw size={18} />
@@ -444,9 +453,9 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                   </div>
                   <div className="p-6 max-h-[60vh] overflow-y-auto space-y-4 bg-slate-50 dark:bg-slate-950 scrollbar-thin">
                       {dailyWarnings.length === 0 ? (
-                          <div className="py-12 text-center text-slate-400 italic">Nenhum aviso pendente.</div>
+                          <div className="py-12 text-center text-slate-400 italic font-bold">Todos os avisos foram lidos. Bom trabalho!</div>
                       ) : dailyWarnings.map(warning => (
-                          <div key={warning.id} className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800 shadow-sm group hover:border-orange-500 transition-all">
+                          <div key={warning.id} className="bg-white dark:bg-slate-900 p-6 rounded-[2rem] border-2 border-slate-200 dark:border-slate-800 shadow-sm group hover:border-orange-500 transition-all relative">
                               <div className="flex justify-between items-start mb-4">
                                   <div>
                                       <span className="px-3 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-[10px] font-black rounded-full uppercase mb-2 inline-block">
@@ -454,25 +463,31 @@ const TaskManager: React.FC<TaskManagerProps> = ({
                                       </span>
                                       <h4 className="text-lg font-black text-slate-800 dark:text-white uppercase">Rota: {warning.rota}</h4>
                                   </div>
+                                  
+                                  {/* FIX: Botão de marcação como lido mais explícito */}
                                   <button 
                                     onClick={() => handleMarkAsViewed(warning.id)}
-                                    className="p-3 bg-green-500 hover:bg-green-600 text-white rounded-2xl shadow-lg transition-all flex items-center gap-2 group-hover:scale-105 active:scale-95"
+                                    className="p-3 px-5 bg-green-500 hover:bg-green-600 text-white rounded-2xl shadow-lg transition-all flex items-center gap-2 group-hover:scale-105 active:scale-95"
+                                    title="Marcar como lido e não mostrar novamente"
                                   >
-                                      <CheckCircle2 size={18} />
-                                      <span className="text-[10px] font-black uppercase">Ciente</span>
+                                      <Check size={18} />
+                                      <span className="text-[10px] font-black uppercase whitespace-nowrap">Marcar como lido</span>
                                   </button>
                               </div>
                               <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed font-medium bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-100 dark:border-slate-700">
                                   {warning.descricao}
                               </p>
-                              <div className="mt-4 flex items-center gap-2 text-[9px] text-slate-400 font-bold uppercase tracking-widest">
-                                  <Clock size={12} /> Data Ocorrência: {new Date(warning.dataOcorrencia).toLocaleDateString('pt-BR')}
+                              <div className="mt-4 flex items-center justify-between">
+                                  <div className="flex items-center gap-2 text-[9px] text-slate-400 font-bold uppercase tracking-widest">
+                                      <Clock size={12} /> Data Ocorrência: {new Date(warning.dataOcorrencia).toLocaleDateString('pt-BR')}
+                                  </div>
+                                  <span className="text-[8px] font-bold text-slate-300 dark:text-slate-600">ID: {warning.id}</span>
                               </div>
                           </div>
                       ))}
                   </div>
-                  <div className="p-6 bg-white dark:bg-slate-900 border-t dark:border-slate-800 text-center">
-                      <button onClick={() => setIsViewWarningsModalOpen(false)} className="px-8 py-3 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 rounded-xl font-black uppercase text-[10px] hover:bg-slate-200 transition-all tracking-widest">Fechar Painel</button>
+                  <div className="p-6 bg-white dark:bg-slate-900 border-t dark:border-slate-800 flex justify-center gap-4">
+                      <button onClick={() => setIsViewWarningsModalOpen(false)} className="px-8 py-3 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 rounded-xl font-black uppercase text-[10px] hover:bg-slate-200 transition-all tracking-widest border border-slate-200 dark:border-slate-700 shadow-sm">Dispensar Painel</button>
                   </div>
               </div>
           </div>
@@ -557,7 +572,7 @@ const TaskManager: React.FC<TaskManagerProps> = ({
       {/* RESET MODAL */}
       {isResetModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border dark:border-slate-700">
+             <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-md overflow-hidden border dark:border-slate-700">
                 <div className="bg-amber-700 dark:bg-slate-800 text-white p-4 flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <div className="p-2 bg-amber-600 rounded-lg">
