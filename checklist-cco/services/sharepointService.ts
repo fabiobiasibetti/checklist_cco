@@ -93,7 +93,6 @@ async function getListColumnMapping(siteId: string, listId: string, token: strin
 function resolveFieldName(mapping: Record<string, string>, target: string): string {
   const normalized = normalizeString(target);
   if (normalized === 'titulo' || normalized === 'rota') {
-      // Prioridade para Title se for especificamente a coluna de nome Title mas o alvo for 'rota' ou 'titulo'
       if (mapping['title']) return 'Title';
   }
   return mapping[normalized] || target;
@@ -374,22 +373,41 @@ export const SharePointService = {
     const list = await findListByIdOrName(siteId, 'avisos_diarios_checklist', token);
     const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
     
+    // Mapeamento manual de segurança e conversão para strings (coluna Texto no SharePoint)
     const raw: any = {
-        Title: warning.operacao,
+        Title: warning.operacao || 'SEM OPERACAO',
         celula: warning.celula,
         rota: warning.rota,
         descricao: warning.descricao,
         data_referencia: new Date(warning.dataOcorrencia).toISOString(),
-        visualizado: false
+        visualizado: "false" // Coluna é Texto, enviando como string para evitar erro
     };
 
     const fields: any = {};
     Object.keys(raw).forEach(k => {
         const int = resolveFieldName(mapping, k);
-        if (internalNames.has(int)) fields[int] = raw[k];
+        // Fallback: se o resolveFieldName não encontrar mapeamento, tenta o nome original se existir na lista
+        if (internalNames.has(int)) {
+            fields[int] = raw[k];
+        } else if (internalNames.has(k)) {
+            fields[k] = raw[k];
+        }
     });
 
-    await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { method: 'POST', body: JSON.stringify({ fields }) });
+    // Garante que Title está preenchido
+    if (!fields['Title']) fields['Title'] = raw.Title;
+
+    console.log('[DEBUG WARNING] Final Payload Fields:', JSON.stringify(fields, null, 2));
+
+    try {
+        await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { 
+            method: 'POST', 
+            body: JSON.stringify({ fields }) 
+        });
+    } catch (error: any) {
+        console.error('[DEBUG ERROR] Critical failure saving warning:', error.message || error);
+        throw error;
+    }
   },
 
   async getDailyWarnings(token: string, userEmail: string): Promise<DailyWarning[]> {
@@ -404,8 +422,8 @@ export const SharePointService = {
         const descCol = resolveFieldName(mapping, 'descricao');
         const dataCol = resolveFieldName(mapping, 'data_referencia');
 
-        // Filtra apenas não visualizados para o usuário específico
-        const filter = `fields/${celulaCol} eq '${userEmail.trim()}' and fields/${visualizadoCol} eq 0`;
+        // Como a coluna é Texto, filtramos pela string 'false' em vez de boolean 0
+        const filter = `fields/${celulaCol} eq '${userEmail.trim()}' and fields/${visualizadoCol} eq 'false'`;
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
         
         return (data.value || []).map((item: any) => {
@@ -417,7 +435,7 @@ export const SharePointService = {
                 rota: f[rotaCol] || "",
                 descricao: f[descCol] || "",
                 dataOcorrencia: f[dataCol] || "",
-                visualizado: Boolean(f[visualizadoCol])
+                visualizado: f[visualizadoCol] === 'true'
             };
         });
     } catch (e) {
@@ -432,7 +450,7 @@ export const SharePointService = {
     const { mapping } = await getListColumnMapping(siteId, list.id, token);
     const visualizadoCol = resolveFieldName(mapping, 'visualizado');
     
-    const fields: any = { [visualizadoCol]: true };
+    const fields: any = { [visualizadoCol]: "true" }; // Enviando como string para coluna tipo Texto
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
   }
 };
