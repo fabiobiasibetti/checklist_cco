@@ -123,7 +123,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const toleranceSec = timeToSeconds(toleranceStr);
     const startSec = timeToSeconds(inicio);
 
-    // Se saiu, calculamos o status real independente de ser data futura ou passada
     if (saida && saida !== '00:00:00' && saida !== '') {
         const endSec = timeToSeconds(saida);
         const diff = endSec - startSec;
@@ -135,7 +134,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         return { status: 'OK', gap: gapFormatted };
     }
 
-    // Caso não tenha saído:
     if (rDate > today) return { status: 'Programada', gap: '' };
     if (rDate < today) return { status: 'Atrasada', gap: '' };
 
@@ -152,9 +150,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!clean) return '';
     const parts = clean.split(':').map(p => p.trim()).filter(Boolean);
     
-    // Heurística de auto-preenchimento
     let h = '00', m = '00', s = '00';
-    
     if (parts.length >= 1) h = parts[0].padStart(2, '0').substring(0, 2);
     if (parts.length >= 2) m = parts[1].padStart(2, '0').substring(0, 2);
     if (parts.length >= 3) s = parts[2].padStart(2, '0').substring(0, 2);
@@ -227,8 +223,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     for (let i = 0; i < total; i++) {
         const rotaName = pendingBulkRoutes[i];
         setBulkStatus((prev: any) => prev ? { ...prev, current: i + 1 } : null);
-        const { status, gap } = calculateStatusWithTolerance(ghostRow.inicio || '00:00:00', ghostRow.saida || '', config?.tolerancia || "00:00:00", ghostRow.data || "");
-        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+        const startFormatted = formatTimeInput(ghostRow.inicio || '00:00:00');
+        const endFormatted = formatTimeInput(ghostRow.saida || '');
+        const { status, gap } = calculateStatusWithTolerance(startFormatted, endFormatted, config?.tolerancia || "00:00:00", ghostRow.data || "");
+        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, inicio: startFormatted, saida: endFormatted, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
         try { const newId = await SharePointService.updateDeparture(token, payload); newRoutes.push({ ...payload, id: newId }); } catch (e) {}
     }
     setRoutes(prev => [...prev, ...newRoutes]);
@@ -274,8 +272,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             setIsSyncing(true);
             try {
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
-                const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '00:00:00', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
-                const payload = { ...updatedGhost, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+                const startFormatted = formatTimeInput(updatedGhost.inicio || '00:00:00');
+                const endFormatted = formatTimeInput(updatedGhost.saida || '');
+                const { status, gap } = calculateStatusWithTolerance(startFormatted, endFormatted, config?.tolerancia || "00:00:00", updatedGhost.data || "");
+                const payload = { ...updatedGhost, inicio: startFormatted, saida: endFormatted, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
                 const newId = await SharePointService.updateDeparture(getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
                 setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Programada', tempo: '' });
@@ -287,8 +287,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const route = routes.find(r => r.id === id);
     if (!route) return;
     
-    // REMOVIDO: Formatação automática aqui dentro. A formatação ocorre no UI event (onBlur).
-    let updatedRoute = { ...route, [field]: value };
+    let finalValue = value;
+    if (field === 'inicio' || field === 'saida') finalValue = formatTimeInput(value);
+    
+    let updatedRoute = { ...route, [field]: finalValue };
     const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
     const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
     updatedRoute.statusOp = status;
@@ -418,15 +420,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             key={route.id + '-inicio'}
                             defaultValue={route.inicio} 
                             placeholder="--:--:--"
-                            onPaste={(e: any) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('inicio', rowIndex, val); } }} 
-                            onBlur={(e) => { 
-                                const formatted = formatTimeInput(e.target.value); 
-                                updateCell(route.id!, 'inicio', formatted); 
+                            onPaste={(e: any) => { 
+                              const val = e.clipboardData.getData('text'); 
+                              if (val.includes('\n')) { 
+                                e.preventDefault(); 
+                                handleMultilinePaste('inicio', rowIndex, val); 
+                              } 
                             }} 
-                            onInput={(e: any) => { 
-                                // Limpeza visual imediata, permite digitação livre
-                                e.target.value = e.target.value.replace(/[^0-9:]/g, ''); 
-                            }}
+                            onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} 
                             className={`${inputClass} font-mono text-center`} 
                         />
                       </td>
@@ -438,15 +439,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             key={route.id + '-saida'}
                             defaultValue={route.saida} 
                             placeholder="--:--:--" 
-                            onPaste={(e: any) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }} 
-                            onBlur={(e) => { 
-                                const formatted = formatTimeInput(e.target.value); 
-                                updateCell(route.id!, 'saida', formatted); 
+                            onPaste={(e: any) => { 
+                              const val = e.clipboardData.getData('text'); 
+                              if (val.includes('\n')) { 
+                                e.preventDefault(); 
+                                handleMultilinePaste('saida', rowIndex, val); 
+                              } 
                             }} 
-                            onInput={(e: any) => {
-                                // Limpeza visual imediata, permite digitação livre
-                                e.target.value = e.target.value.replace(/[^0-9:]/g, '');
-                            }}
+                            onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} 
                             className={`${inputClass} font-mono text-center`} 
                         />
                       </td>
