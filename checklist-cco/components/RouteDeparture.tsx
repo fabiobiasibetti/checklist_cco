@@ -20,7 +20,7 @@ const OBSERVATION_TEMPLATES: Record<string, string[]> = {
   'Fábrica': ["Atraso na descarga | Entrada **:**h - Saída **:**h"],
   'Logística': ["Atraso no lavador | Chegada da rota anterior às **:**h - Entrada na fábrica às **:**h", "Motorista adiantou a rota devido à desvios", "Atraso na rota anterior (nome da rota)", "Atraso na rota anterior | Chegada no lavador **:**h - Entrada na fábrica às **:**h", "Falta de material de coleta para realizar a rota"],
   'Mão de obra': ["Atraso do motorista", "Adiantamento do motorista", "A rota iniciou atrasada devido à interjornada do motorista | Atrasou na rota anterior devido à", "Troca do motorista previsto devido à saúde"],
-  'Manutenção': ["Precisou realizar a troca de pneus | Início **:**h - Término **:**h", "Troca de mola | Início **:**h - Término **:**h", "Manutenção na parte elétrica | Início **:**h - Término **:**h", "Manutenção nos freios | Início **:**h - Término **:**h", "Manutenção na bomba de carregamento de leite | Início **:**h - Término **:**h"],
+  'Manutenção': ["Precisou realizar a troca de pneus | Início **:**h - Término **:**h", "Troca de mola | Início **:**h - Término **:**h", "Manutenção na parte elétrica | Início **:**h - Término **:**h", "Manutenção na parte elétrica | Início **:**h - Término **:**h", "Manutenção nos freios | Início **:**h - Término **:**h", "Manutenção na bomba de carregamento de leite | Início **:**h - Término **:**h"],
   'Divergência de Roteirização': ["Horário de saída da rota não atende os produtores", "Horário de saída da rota precisa ser alterado devido à entrada de produtores"],
   'Solicitado pelo Cliente': ["Rota saiu adiantada para realizar socorro", "Cliente solicitou para a rota sair adiantada"],
   'Infraestrutura': []
@@ -150,10 +150,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const formatTimeInput = (value: string): string => {
     let clean = (value || "").replace(/[^0-9:]/g, '');
     if (!clean) return '';
-    const parts = clean.split(':');
-    let h = (parts[0] || '00').padStart(2, '0').substring(0, 2);
-    let m = (parts[1] || '00').padStart(2, '0').substring(0, 2);
-    let s = (parts[2] || '00').padStart(2, '0').substring(0, 2);
+    const parts = clean.split(':').map(p => p.trim()).filter(Boolean);
+    
+    // Heurística de auto-preenchimento
+    let h = '00', m = '00', s = '00';
+    
+    if (parts.length >= 1) h = parts[0].padStart(2, '0').substring(0, 2);
+    if (parts.length >= 2) m = parts[1].padStart(2, '0').substring(0, 2);
+    if (parts.length >= 3) s = parts[2].padStart(2, '0').substring(0, 2);
+
     return `${h}:${m}:${s}`;
   };
 
@@ -281,6 +286,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
     const route = routes.find(r => r.id === id);
     if (!route) return;
+    
+    // REMOVIDO: Formatação automática aqui dentro. A formatação ocorre no UI event (onBlur).
     let updatedRoute = { ...route, [field]: value };
     const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
     const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
@@ -412,8 +419,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             defaultValue={route.inicio} 
                             placeholder="--:--:--"
                             onPaste={(e: any) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('inicio', rowIndex, val); } }} 
-                            onBlur={(e) => { const formatted = formatTimeInput(e.target.value); updateCell(route.id!, 'inicio', formatted); }} 
-                            onInput={(e: any) => { e.target.value = e.target.value.replace(/[^0-9:]/g, ''); }}
+                            onBlur={(e) => { 
+                                const formatted = formatTimeInput(e.target.value); 
+                                updateCell(route.id!, 'inicio', formatted); 
+                            }} 
+                            onInput={(e: any) => { 
+                                // Limpeza visual imediata, permite digitação livre
+                                e.target.value = e.target.value.replace(/[^0-9:]/g, ''); 
+                            }}
                             className={`${inputClass} font-mono text-center`} 
                         />
                       </td>
@@ -431,6 +444,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                                 updateCell(route.id!, 'saida', formatted); 
                             }} 
                             onInput={(e: any) => {
+                                // Limpeza visual imediata, permite digitação livre
                                 e.target.value = e.target.value.replace(/[^0-9:]/g, '');
                             }}
                             className={`${inputClass} font-mono text-center`} 
