@@ -63,9 +63,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
   const [isBulkMappingModalOpen, setIsBulkMappingModalOpen] = useState(false);
 
-  // Ghost Row State - Saída inicia VAZIA
+  // Ghost Row State - Saída inicia VAZIA e status Programada
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
-    id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Pendente', tempo: ''
+    id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Programada', tempo: '', semana: ''
   });
 
   const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
@@ -114,17 +114,31 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return isNegative ? `-${formatted}` : formatted;
   };
 
-  const calculateStatusWithTolerance = (inicio: string, saida: string, toleranceStr: string = "00:00:00"): { status: string, gap: string } => {
+  const calculateStatusWithTolerance = (inicio: string, saida: string, toleranceStr: string = "00:00:00", routeDate: string): { status: string, gap: string } => {
     if (!inicio || inicio === '00:00:00') return { status: 'Pendente', gap: '' };
+    if (!routeDate) return { status: 'Pendente', gap: '' };
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [y, m, d] = routeDate.split('-').map(Number);
+    const rDate = new Date(y, m - 1, d);
+    rDate.setHours(0, 0, 0, 0);
+
+    // CASO 0: DATA FUTURA
+    if (rDate > today) return { status: 'Programada', gap: '' };
 
     const toleranceSec = timeToSeconds(toleranceStr);
     const startSec = timeToSeconds(inicio);
 
-    // CASO 1: NÃO SAIU AINDA (Saída Vazia)
+    // CASO 1: NÃO SAIU AINDA (Saída Vazia ou 00:00:00)
     if (!saida || saida === '00:00:00' || saida === '') {
+      // Se a data já passou, está atrasada independente do horário
+      if (rDate < today) return { status: 'Atrasada', gap: '' };
+
+      // Se for hoje, checa o horário atual contra o início + tolerância
       const nowSec = currentTime.getHours() * 3600 + currentTime.getMinutes() * 60 + currentTime.getSeconds();
       if (nowSec > (startSec + toleranceSec)) {
-        return { status: 'Atrasada', gap: '' }; // Status Atrasada sem tempo = Amarelo no getRowStyle
+        return { status: 'Atrasada', gap: '' };
       }
       return { status: 'Pendente', gap: '' };
     }
@@ -213,16 +227,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const config = userConfigs.find(c => c.operacao === operacao);
     for (let i = 0; i < total; i++) {
         const rotaName = pendingBulkRoutes[i];
-        // Explicitly type prev in the updater function to avoid 'unknown' issues during batch creation
         setBulkStatus((prev: { active: boolean, current: number, total: number } | null) => prev ? { ...prev, current: i + 1 } : null);
-        const { status, gap } = calculateStatusWithTolerance(ghostRow.inicio || '00:00:00', ghostRow.saida || '', config?.tolerancia || "00:00:00");
+        const { status, gap } = calculateStatusWithTolerance(ghostRow.inicio || '00:00:00', ghostRow.saida || '', config?.tolerancia || "00:00:00", ghostRow.data || "");
         const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
         try { const newId = await SharePointService.updateDeparture(token, payload); newRoutes.push({ ...payload, id: newId }); } catch (e) {}
     }
     setRoutes(prev => [...prev, ...newRoutes]);
     setBulkStatus(null);
     setPendingBulkRoutes([]);
-    setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Pendente', tempo: '' });
+    setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Programada', tempo: '' });
   };
 
   const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
@@ -238,7 +251,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         if (field === 'inicio' || field === 'saida') finalValue = formatTimeInput(finalValue);
         const updatedRoute: RouteDeparture = { ...route, [field]: finalValue };
         const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
-        const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00");
+        const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
         updatedRoute.statusOp = status;
         updatedRoute.tempo = gap;
         try { await SharePointService.updateDeparture(token, updatedRoute); setRoutes(prev => prev.map(r => r.id === route.id ? updatedRoute : r)); } catch (err) {}
@@ -262,11 +275,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             setIsSyncing(true);
             try {
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
-                const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '00:00:00', updatedGhost.saida || '', config?.tolerancia || "00:00:00");
+                const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '00:00:00', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
                 const payload = { ...updatedGhost, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
                 const newId = await SharePointService.updateDeparture(getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
-                setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Pendente', tempo: '' });
+                setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Programada', tempo: '' });
             } catch (e) {} finally { setIsSyncing(false); }
         } else { setGhostRow(updatedGhost); }
         return;
@@ -278,10 +291,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (field === 'inicio' || field === 'saida') finalValue = formatTimeInput(value);
     let updatedRoute = { ...route, [field]: finalValue };
     const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
-    const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00");
+    const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
     updatedRoute.statusOp = status;
     updatedRoute.tempo = gap;
-    if (status !== 'Atrasada') { updatedRoute.motivo = ""; updatedRoute.observacao = ""; }
+    if (status !== 'Atrasada' && status !== 'Adiantada') { updatedRoute.motivo = ""; updatedRoute.observacao = ""; }
     setRoutes(prev => prev.map(r => r.id === id ? updatedRoute : r));
     setIsSyncing(true);
     try { await SharePointService.updateDeparture(getAccessToken(), updatedRoute); } catch (e) {} finally { setIsSyncing(false); }
@@ -291,6 +304,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (route.id === 'ghost') return "bg-slate-50 dark:bg-slate-900 italic text-slate-400";
     const status = route.statusOp;
     
+    // ⚪ PROGRAMADA (Data Futura)
+    if (status === 'Programada') {
+        return "bg-slate-100 dark:bg-slate-800 border-l-4 border-slate-400 text-slate-500 dark:text-slate-400";
+    }
+
     // ✅ OK - Verde Soft
     if (status === 'OK') return "bg-emerald-50 dark:bg-emerald-900/10 border-l-4 border-emerald-600";
     
@@ -345,7 +363,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   return (
     <div className="flex flex-col h-full bg-[#020617] p-4 overflow-hidden select-none font-sans animate-fade-in relative">
       
-      {/* BULK PROGRESS OVERLAY */}
       {bulkStatus?.active && (
           <div className="fixed inset-0 z-[500] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-300">
               <div className="bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-primary-500 shadow-2xl flex flex-col items-center gap-6 max-w-sm w-full">
@@ -356,7 +373,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           </div>
       )}
 
-      {/* TOOLBAR */}
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg"><Clock size={20} /></div>
@@ -398,8 +414,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   const rowStyle = getRowStyle(route);
                   const isGhost = route.id === 'ghost';
                   const isSelected = selectedIds.has(route.id!);
-                  const isAlert = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
-                  const isDelayedFilled = isAlert && (route.saida !== '' && route.saida !== '00:00:00');
+                  const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
+                  const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
                   
                   const inputClass = `w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? 'text-white placeholder-white/50' : 'text-slate-800 dark:text-slate-200 placeholder-slate-400'}`;
 
@@ -418,14 +434,14 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.placa} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('placa', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.saida} placeholder="--:--:--" onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }} onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
-                        {isAlert && (
+                        {isDelayed && (
                           <select value={route.motivo} onChange={(e) => updateCell(route.id!, 'motivo', e.target.value)} className="w-full bg-white/20 dark:bg-slate-800/20 border-none px-2 py-1 text-[10px] font-bold text-inherit outline-none appearance-none cursor-pointer">
                               <option value="" className="text-slate-800">---</option>{MOTIVOS.map(m => (<option key={m} value={m} className="text-slate-800">{m}</option>))}
                           </select>
                         )}
                       </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 relative align-top">
-                        {isAlert && (
+                        {isDelayed && (
                           <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
                             <textarea value={route.observacao || ""} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('observacao', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id!)} placeholder="..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal' : 'truncate pr-8'}`} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
                             {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id!); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 opacity-60"><ChevronDown size={14} /></button>}
@@ -440,11 +456,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><select value={route.statusGeral} onChange={(e) => updateCell(route.id!, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent border-none text-[10px] font-bold text-center appearance-none"><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><select value={route.operacao} onChange={(e) => updateCell(route.id!, 'operacao', e.target.value)} className="w-full h-full bg-transparent border-none text-[9px] font-black text-center uppercase"><option value="">OP...</option>{userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}</select></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : 'bg-red-100 border-red-400 text-red-800'}`}>{route.statusOp}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : 'bg-red-100 border-red-400 text-red-800'}`}>{route.statusOp}</span>
                       </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 text-center font-mono font-bold text-[10px]">{route.tempo}</td>
                       
-                      {/* COLUNA DE AÇÕES NO FINAL */}
                       <td className="p-0 border border-slate-300 dark:border-slate-700 flex items-center justify-center gap-1 h-12">
                           {!isGhost && (
                               <>
@@ -465,9 +480,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       </div>
 
-      {/* MODAIS (Batch, Mapping, History, Stats) - Mantidos e adaptados */}
       {isBulkMappingModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-6">
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 shadow-2xl animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><Layers size={24} /> Atribuir Planta para Lote</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Você colou <span className="text-primary-500 font-black">{pendingBulkRoutes.length} rotas</span>. Escolha a operação:</p>
@@ -480,7 +494,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       )}
 
       {isMappingModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-6">
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><LinkIcon size={24} /> Vínculo Necessário</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">A rota <span className="text-primary-500 font-black">{pendingMappingRoute}</span> não possui planta vinculada:</p>
@@ -493,7 +507,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       )}
 
       {isHistoryModalOpen && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
               <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
                   <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
                       <div className="flex items-center gap-4"><Database size={24} /><h3 className="font-black uppercase tracking-widest text-base">Histórico Definitivo</h3></div>
@@ -521,7 +535,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       )}
 
       {isStatsModalOpen && dashboardStats && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[200] flex items-center justify-center p-4">
             <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden border dark:border-slate-800 animate-in zoom-in">
                 <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><TrendingUp size={24} /><h3 className="font-black uppercase tracking-widest text-base">Dashboard Operacional</h3></div><button onClick={() => setIsStatsModalOpen(false)}><X size={28} /></button></div>
                 <div className="p-8 grid grid-cols-3 gap-6 bg-slate-50 dark:bg-slate-950">

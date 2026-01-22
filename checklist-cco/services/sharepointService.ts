@@ -1,5 +1,8 @@
 
-import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping } from '../types';
+// @google/genai guidelines: Use direct process.env.API_KEY, no UI for keys, use correct model names.
+// Correct models: 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-image', etc.
+
+import { SPTask, SPOperation, SPStatus, Task, OperationStatus, HistoryRecord, RouteDeparture, RouteOperationMapping, RouteConfig } from '../types';
 
 export interface DailyWarning {
   id: string;
@@ -262,13 +265,21 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
-  async getRouteConfigs(token: string, userEmail: string): Promise<any[]> {
+  // FIX: Explicitly return RouteConfig[] instead of any[] to satisfy TypeScript in the component.
+  async getRouteConfigs(token: string, userEmail: string): Promise<RouteConfig[]> {
     try {
         const siteId = await getResolvedSiteId(token);
         const list = await findListByIdOrName(siteId, 'CONFIG_SAIDA_DE_ROTAS', token);
         const { mapping } = await getListColumnMapping(siteId, list.id, token);
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields`, token);
-        return (data.value || []).map((item: any) => { const f = item.fields; return { operacao: f[resolveFieldName(mapping, 'OPERACAO')] || "", email: (f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(), tolerancia: f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00" }; }).filter(c => c.email === userEmail.toLowerCase().trim());
+        return (data.value || []).map((item: any): RouteConfig => { 
+          const f = item.fields; 
+          return { 
+            operacao: String(f[resolveFieldName(mapping, 'OPERACAO')] || ""), 
+            email: String(f[resolveFieldName(mapping, 'EMAIL')] || "").toString().toLowerCase().trim(), 
+            tolerancia: String(f[resolveFieldName(mapping, 'TOLERANCIA')] || "00:00:00") 
+          }; 
+        }).filter(c => c.email === userEmail.toLowerCase().trim());
     } catch (e) { return []; }
   },
 
