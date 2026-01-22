@@ -9,7 +9,7 @@ import {
   BarChart3, TrendingUp,
   Activity, ChevronRight, AlignLeft,
   Archive, Database, Save, Link as LinkIcon,
-  Layers
+  Layers, Trash2
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -57,8 +57,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [isSyncing, setIsSyncing] = useState(false);
   const [zoomLevel] = useState(0.9);
   
-  // Bulk state
+  // Bulk state para criação de rotas
   const [bulkStatus, setBulkStatus] = useState<{ active: boolean, current: number, total: number } | null>(null);
+  const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
+  const [isBulkMappingModalOpen, setIsBulkMappingModalOpen] = useState(false);
 
   // Ghost Row State
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
@@ -87,27 +89,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const filterRef = useRef<HTMLDivElement>(null);
   const obsDropdownRef = useRef<HTMLDivElement>(null);
+  // Fix: resizingRef declaration must not include .current property in the constant name
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
 
   const getAccessToken = (): string => (window as any).__access_token || '';
-
-  const loadData = async () => {
-    const token = getAccessToken();
-    if (!token) return;
-    setIsLoading(true);
-    try {
-      const [configs, mappings, spData] = await Promise.all([
-        SharePointService.getRouteConfigs(token, currentUser.email),
-        SharePointService.getRouteOperationMappings(token),
-        SharePointService.getDepartures(token)
-      ]);
-      setUserConfigs(configs || []);
-      setRouteMappings(mappings || []);
-      setRoutes(spData || []);
-    } catch (e) { console.error(e); } finally { setIsLoading(false); }
-  };
-
-  useEffect(() => { loadData(); }, [currentUser]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -131,6 +116,24 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       window.removeEventListener('mousedown', handleClickOutside);
     };
   }, []);
+
+  const loadData = async () => {
+    const token = getAccessToken();
+    if (!token) return;
+    setIsLoading(true);
+    try {
+      const [configs, mappings, spData] = await Promise.all([
+        SharePointService.getRouteConfigs(token, currentUser.email),
+        SharePointService.getRouteOperationMappings(token),
+        SharePointService.getDepartures(token)
+      ]);
+      setUserConfigs(configs || []);
+      setRouteMappings(mappings || []);
+      setRoutes(spData || []);
+    } catch (e) { console.error(e); } finally { setIsLoading(false); }
+  };
+
+  useEffect(() => { loadData(); }, [currentUser]);
 
   const formatTimeInput = (value: string): string => {
     let clean = (value || "").replace(/[^0-9:]/g, '');
@@ -178,66 +181,136 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     });
   };
 
-  const processBulkRoutes = async (text: string, baseData: Partial<RouteDeparture>) => {
-      const lines = text.split(/[\n;]/).map(l => l.trim()).filter(Boolean);
-      if (lines.length <= 1) return null;
+  // Lógica de exclusão individual
+  const handleDeleteRoute = async (id: string) => {
+    if (!confirm('Deseja excluir permanentemente esta rota do SharePoint?')) return;
+    const token = getAccessToken();
+    setIsSyncing(true);
+    try {
+      await SharePointService.deleteDeparture(token, id);
+      setRoutes(prev => prev.filter(r => r.id !== id));
+      setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+    } catch (e) {
+      alert("Erro ao excluir item.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
-      const token = getAccessToken();
-      const total = lines.length;
-      setBulkStatus({ active: true, current: 0, total });
+  // Lógica de exclusão em massa
+  const handleDeleteSelected = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Deseja excluir as ${selectedIds.size} rotas selecionadas do SharePoint?`)) return;
+    
+    const token = getAccessToken();
+    setIsSyncing(true);
+    const idsToDelete = Array.from(selectedIds);
+    let success = 0;
+    let failed = 0;
 
-      const newRoutes: RouteDeparture[] = [];
-      const config = userConfigs.find(c => c.operacao === baseData.operacao);
+    for (const id of idsToDelete) {
+        try {
+            await SharePointService.deleteDeparture(token, id);
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
 
-      for (let i = 0; i < total; i++) {
-          const rotaName = lines[i];
-          setBulkStatus(prev => prev ? { ...prev, current: i + 1 } : null);
+    setRoutes(prev => prev.filter(r => !selectedIds.has(r.id!)));
+    setSelectedIds(new Set());
+    setIsSyncing(false);
+    alert(`${success} rotas excluídas. ${failed > 0 ? failed + ' falhas.' : ''}`);
+  };
 
-          // Tenta mapear operação automaticamente se não estiver definida na Ghost Row
-          let op = baseData.operacao || '';
-          if (!op) {
-              const mapping = routeMappings.find(m => m.Title === rotaName);
-              if (mapping) op = mapping.OPERACAO;
-          }
+  // Lógica de criação de rotas em lote
+  const handleBulkCreateSave = async (operacao: string) => {
+    const token = getAccessToken();
+    const total = pendingBulkRoutes.length;
+    setIsBulkMappingModalOpen(false);
+    setBulkStatus({ active: true, current: 0, total });
 
-          const { gap, status } = calculateGap(baseData.inicio || '00:00:00', baseData.saida || '00:00:00', config?.tolerancia);
-          
-          const payload: RouteDeparture = {
-              ...baseData,
-              id: '', // Novo item
-              rota: rotaName,
-              operacao: op || 'GERAL',
-              statusOp: status,
-              tempo: gap,
-              createdAt: new Date().toISOString()
-          } as RouteDeparture;
+    const newRoutes: RouteDeparture[] = [];
+    const config = userConfigs.find(c => c.operacao === operacao);
 
-          try {
-              const newId = await SharePointService.updateDeparture(token, payload);
-              newRoutes.push({ ...payload, id: newId });
-          } catch (e) {
-              console.error(`Erro na rota ${rotaName}`, e);
-          }
-      }
+    for (let i = 0; i < total; i++) {
+        const rotaName = pendingBulkRoutes[i];
+        setBulkStatus(prev => prev ? { ...prev, current: i + 1 } : null);
 
-      setRoutes(prev => [...prev, ...newRoutes]);
-      setBulkStatus(null);
-      alert(`${newRoutes.length} rotas criadas com sucesso para ${baseData.operacao || 'a planta selecionada'}!`);
-      
-      setGhostRow({
-          id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'OK', tempo: 'OK'
-      });
+        const { gap, status } = calculateGap(ghostRow.inicio || '00:00:00', ghostRow.saida || '00:00:00', config?.tolerancia);
+        
+        const payload: RouteDeparture = {
+            ...ghostRow,
+            id: '', 
+            rota: rotaName,
+            operacao: operacao,
+            statusOp: status,
+            tempo: gap,
+            createdAt: new Date().toISOString()
+        } as RouteDeparture;
 
-      return true;
+        try {
+            const newId = await SharePointService.updateDeparture(token, payload);
+            newRoutes.push({ ...payload, id: newId });
+        } catch (e) {
+            console.error(`Erro na rota ${rotaName}`, e);
+        }
+    }
+
+    setRoutes(prev => [...prev, ...newRoutes]);
+    setBulkStatus(null);
+    setPendingBulkRoutes([]);
+    setGhostRow({
+        id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'OK', tempo: 'OK'
+    });
+    alert(`${newRoutes.length} rotas criadas vinculadas à planta ${operacao}!`);
+  };
+
+  // Lógica de colagem vertical em colunas
+  const handleMultilinePaste = async (field: keyof RouteDeparture, startRowIndex: number, value: string) => {
+    const lines = value.split(/[\n\r]/).map(l => l.trim()).filter(Boolean);
+    if (lines.length <= 1) return; // Deixa o comportamento padrão do input
+    
+    if (!confirm(`Detectado ${lines.length} linhas. Deseja distribuir esses dados verticalmente para as próximas rotas?`)) return;
+
+    const token = getAccessToken();
+    setIsSyncing(true);
+    
+    // Fix: cast filteredRoutes to specific type if inference is causing issues
+    const targetRoutes = (filteredRoutes as RouteDeparture[]).slice(startRowIndex, startRowIndex + lines.length);
+
+    for (let i = 0; i < targetRoutes.length; i++) {
+        const route = targetRoutes[i];
+        let finalValue = lines[i];
+
+        if (field === 'inicio' || field === 'saida') finalValue = formatTimeInput(finalValue);
+        
+        const updatedRoute: RouteDeparture = { ...route, [field]: finalValue };
+        const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
+        const { gap, status } = calculateGap(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia);
+        
+        updatedRoute.statusOp = status;
+        updatedRoute.tempo = gap;
+
+        try {
+            await SharePointService.updateDeparture(token, updatedRoute);
+            setRoutes(prev => prev.map(r => r.id === route.id ? updatedRoute : r));
+        } catch (err) {
+            console.error(`Erro ao atualizar linha ${i}`, err);
+        }
+    }
+    setIsSyncing(false);
   };
 
   const handleGhostRowEdit = async (field: keyof RouteDeparture, value: string) => {
-    const token = getAccessToken();
-    
-    // Detecta colagem múltipla
+    // Detecta colagem múltipla de rotas
     if (field === 'rota' && (value.includes('\n') || value.includes(';'))) {
-        await processBulkRoutes(value, ghostRow);
-        return;
+        const lines = value.split(/[\n;]/).map(l => l.trim()).filter(Boolean);
+        if (lines.length > 1) {
+            setPendingBulkRoutes(lines);
+            setIsBulkMappingModalOpen(true);
+            return;
+        }
     }
 
     const updatedGhost = { ...ghostRow, [field]: value };
@@ -252,10 +325,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         }
     }
 
-    // Salvamento normal se não for bulk e tiver rota
     if (field !== 'rota' && updatedGhost.rota && updatedGhost.rota !== "") {
         setIsSyncing(true);
         try {
+            const token = getAccessToken();
             const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
             const { gap, status } = calculateGap(updatedGhost.inicio || '00:00:00', updatedGhost.saida || '00:00:00', config?.tolerancia);
             const payload = { ...updatedGhost, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
@@ -363,7 +436,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       
       {/* BULK PROGRESS OVERLAY */}
       {bulkStatus?.active && (
-          <div className="absolute inset-0 z-[500] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-300">
+          <div className="fixed inset-0 z-[500] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-300">
               <div className="bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-primary-500 shadow-2xl flex flex-col items-center gap-6 max-w-sm w-full">
                   <div className="relative">
                       <Loader2 size={64} className="text-primary-600 animate-spin" />
@@ -403,7 +476,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             <table className="border-collapse table-fixed w-full min-w-max">
               <thead className="sticky top-0 z-50 bg-[#1e293b] text-white shadow-md">
                 <tr className="h-12">
-                  <th style={{ width: 35 }} className="bg-slate-900/50 border border-slate-700/50"></th>
+                  <th style={{ width: 35 }} className="bg-slate-900/50 border border-slate-700/50 flex items-center justify-center">
+                      {selectedIds.size > 0 && (
+                          <button onClick={handleDeleteSelected} className="p-1 text-red-500 hover:text-red-400 transition-colors" title="Excluir Selecionados">
+                              <Trash2 size={16} />
+                          </button>
+                      )}
+                  </th>
                   {[ { id: 'rota', label: 'ROTA' }, { id: 'data', label: 'DATA' }, { id: 'inicio', label: 'INÍCIO' }, { id: 'motorista', label: 'MOTORISTA' }, { id: 'placa', label: 'PLACA' }, { id: 'saida', label: 'SAÍDA' }, { id: 'motivo', label: 'MOTIVO' }, { id: 'observacao', label: 'OBSERVAÇÃO' }, { id: 'geral', label: 'GERAL' }, { id: 'operacao', label: 'OPERAÇÃO' }, { id: 'status', label: 'STATUS' }, { id: 'tempo', label: 'TEMPO' } ].map(col => (
                     <th key={col.id} style={{ width: colWidths[col.id] }} className="relative p-1 border border-slate-700/50 text-[10px] font-black uppercase tracking-wider text-left group">
                       <div className="flex items-center justify-between px-2 h-full"><span>{col.label}</span><button onClick={(e) => { e.stopPropagation(); setActiveFilterCol(activeFilterCol === col.id ? null : col.id); }} className={`p-1 rounded ${!!colFilters[col.id] || (selectedFilters[col.id]?.length ?? 0) > 0 ? 'text-yellow-400' : 'text-white/40'}`}><Filter size={11} /></button></div>
@@ -414,7 +493,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-300 dark:divide-slate-700">
-                {[...filteredRoutes, ghostRow].map((route) => {
+                {[...filteredRoutes, ghostRow].map((route, rowIndex) => {
                   const rowStyle = getRowStyle(route);
                   const isGhost = route.id === 'ghost';
                   const isDelayed = route.statusOp === 'Atrasado';
@@ -423,7 +502,18 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
                   return (
                     <tr key={route.id} className={`${isSelected ? 'bg-primary-600/20' : rowStyle} group transition-all h-auto`}>
-                      <td className={`p-0 border border-slate-300 dark:border-slate-700 cursor-pointer w-[35px] ${isSelected ? 'bg-primary-600' : 'hover:bg-slate-200 dark:hover:bg-slate-700'}`} onClick={() => !isGhost && toggleSelection(route.id!)}></td>
+                      <td className={`p-0 border border-slate-300 dark:border-slate-700 cursor-pointer w-[35px] flex items-center justify-center h-12 ${isSelected ? 'bg-primary-600' : 'hover:bg-slate-200 dark:hover:bg-slate-700'}`}>
+                          {!isGhost && (
+                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={(e) => { e.stopPropagation(); toggleSelection(route.id!); }} className="p-1 text-slate-400 hover:text-primary-500">
+                                      {isSelected ? <CheckSquare size={14}/> : <Square size={14}/>}
+                                  </button>
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteRoute(route.id!); }} className="p-1 text-red-400 hover:text-red-500">
+                                      <Trash2 size={14} />
+                                  </button>
+                              </div>
+                          )}
+                      </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
                           {isGhost ? (
                               <textarea
@@ -443,10 +533,42 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                           )}
                       </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="date" value={route.data} onChange={(e) => updateCell(route.id!, 'data', e.target.value)} className={`${inputClass} text-center`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} className={`${inputClass}`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.placa} onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.saida} onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                          <input 
+                            type="text" 
+                            value={route.inicio} 
+                            onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('inicio', rowIndex, val); } }}
+                            onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} 
+                            className={`${inputClass} font-mono text-center`} 
+                          />
+                      </td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                          <input 
+                            type="text" 
+                            value={route.motorista} 
+                            onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('motorista', rowIndex, val); } }}
+                            onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} 
+                            className={`${inputClass}`} 
+                          />
+                      </td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                          <input 
+                            type="text" 
+                            value={route.placa} 
+                            onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('placa', rowIndex, val); } }}
+                            onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} 
+                            className={`${inputClass} font-mono text-center`} 
+                          />
+                      </td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                          <input 
+                            type="text" 
+                            value={route.saida} 
+                            onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }}
+                            onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} 
+                            className={`${inputClass} font-mono text-center`} 
+                          />
+                      </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
                         {isDelayed && (
                           <select value={route.motivo} onChange={(e) => updateCell(route.id!, 'motivo', e.target.value)} className="w-full bg-white/20 dark:bg-slate-800/20 border-none px-2 py-1 text-[10px] font-bold text-inherit outline-none appearance-none cursor-pointer">
@@ -457,7 +579,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 relative align-top min-h-[44px]">
                         {isDelayed && (
                           <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
-                            <textarea value={route.observacao || ""} onChange={(e) => updateCell(route.id!, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id!)} placeholder="..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal' : 'truncate pr-8'}`} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                            <textarea 
+                                value={route.observacao || ""} 
+                                onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('observacao', rowIndex, val); } }}
+                                onChange={(e) => updateCell(route.id!, 'observacao', e.target.value)} 
+                                onFocus={() => setActiveObsId(route.id!)} 
+                                placeholder="..." 
+                                className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal' : 'truncate pr-8'}`} 
+                                onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} 
+                            />
                             {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id!); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 opacity-60"><ChevronDown size={14} /></button>}
                             {activeObsId === route.id && (
                               <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
@@ -479,7 +609,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         </div>
       </div>
 
-      {/* MAPPING MODAL OBRIGATÓRIO */}
+      {/* MAPPING MODAL OBRIGATÓRIO (SINGLE ITEM) */}
       {isMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-6">
               <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 shadow-[0_0_40px_rgba(59,130,246,0.3)] animate-in zoom-in">
@@ -497,7 +627,25 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
           </div>
       )}
 
-      {/* HISTÓRICO MODAL */}
+      {/* BATCH MAPPING MODAL (PARA COLAGEM DE MÚLTIPLAS ROTAS) */}
+      {isBulkMappingModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-6">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 shadow-[0_0_40px_rgba(59,130,246,0.3)] animate-in zoom-in">
+                  <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><Layers size={24} /> Inserção em Lote</div>
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 font-medium">Você colou <span className="text-primary-500 font-black">{pendingBulkRoutes.length} rotas</span>. Selecione a operação para TODAS elas:</p>
+                  <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 scrollbar-thin">
+                      {userConfigs.map(c => (
+                          <button key={c.operacao} onClick={() => handleBulkCreateSave(c.operacao)} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl hover:bg-primary-600 hover:text-white hover:border-primary-500 transition-all font-black text-xs uppercase shadow-sm">
+                              {c.operacao}
+                          </button>
+                      ))}
+                  </div>
+                  <button onClick={() => { setIsBulkMappingModalOpen(false); setPendingBulkRoutes([]); }} className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400 hover:text-red-500">Cancelar Lote</button>
+              </div>
+          </div>
+      )}
+
+      {/* MODAL HISTÓRICO */}
       {isHistoryModalOpen && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-6">
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in">
