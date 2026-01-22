@@ -328,21 +328,23 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const handleSearchArchive = async () => {
     setIsSearchingArchive(true);
     try {
+        console.log('[SEARCH_ARCHIVE] Fetching with:', { histStart, histEnd });
         const results = await SharePointService.getArchivedDepartures(getAccessToken(), null, histStart, histEnd);
-        console.log('Archived results:', results);
-        console.log('User configs:', userConfigs);
+        console.log('[SEARCH_ARCHIVE] Raw results:', results);
+        console.log('[SEARCH_ARCHIVE] User configs:', userConfigs);
         
         const myOps = new Set(userConfigs.map(c => c.operacao));
-        console.log('My operations:', myOps);
+        console.log('[SEARCH_ARCHIVE] My operations filter:', Array.from(myOps));
         
+        // Se myOps estiver vazio, não filtra nada para não bloquear o usuário caso configs falhem
         const filtered = results && results.length > 0 
           ? results.filter(r => !myOps.size || myOps.has(r.operacao))
           : [];
-        console.log('Filtered results:', filtered);
+        console.log('[SEARCH_ARCHIVE] Filtered results:', filtered);
         
         setArchivedResults(filtered);
     } catch (err: any) { 
-        console.error('Archive search error:', err);
+        console.error('[SEARCH_ARCHIVE] Error:', err);
         alert("Erro na busca: " + (err?.message || "Erro desconhecido")); 
     } finally { 
         setIsSearchingArchive(false); 

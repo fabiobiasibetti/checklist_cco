@@ -20,6 +20,7 @@ const STATUS_CONFIG: Record<string, { label: string, color: string, next: Operat
   'PR': { label: 'PR', color: 'bg-slate-200 text-slate-600 border-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:border-slate-600', next: 'OK', shortcut: '6', desc: 'Pendente' },
 };
 
+// Added teamMembers to fix the TS error in App.tsx
 interface TaskManagerProps {
   tasks: Task[];
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>;
@@ -30,6 +31,7 @@ interface TaskManagerProps {
   setCollapsedCategories: any;
   currentUser: User;
   onLogout: () => void;
+  teamMembers: string[];
 }
 
 const TaskManager: React.FC<TaskManagerProps> = ({ 
@@ -40,7 +42,8 @@ const TaskManager: React.FC<TaskManagerProps> = ({
   setCollapsedCategories,
   onUserSwitch, 
   currentUser,
-  onLogout
+  onLogout,
+  teamMembers
 }) => {
   const [activeTool, setActiveTool] = useState<OperationStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);

@@ -310,13 +310,13 @@ export const SharePointService = {
       return (data.value || []).map((item: any) => {
         const f = item.fields;
         return {
-          id: String(item.id), semana: f[resolveFieldName(mapping, 'Semana')] || "", rota: f.Title || "", data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "", inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", motorista: f[resolveFieldName(mapping, 'Motorista')] || "", placa: f[resolveFieldName(mapping, 'Placa')] || "", saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", observacao: f[resolveFieldName(mapping, 'Observacao')] || "", statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", operacao: f[resolveFieldName(mapping, 'Operacao')] || "", statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", tempo: f[resolveFieldName(mapping, 'TempoGap')] || "OK", createdAt: f.Created || new Date().toISOString()
+          id: String(item.id), semana: f[resolveFieldName(mapping, 'Semana')] || "", rota: f.Title || "", data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "", inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", motorista: f[resolveFieldName(mapping, 'Motorista')] || "", placa: f[resolveFieldName(mapping, 'Placa')] || "", saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", observacao: f[resolveFieldName(mapping, 'Observacao')] || "", statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", operacao: f[resolveFieldName(mapping, 'Operacao')] || "", statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "OK", createdAt: f.Created || new Date().toISOString()
         };
       });
     } catch (e) { return []; }
   },
 
-  async getArchivedDepartures(token: string, operation: string, startDate: string, endDate: string): Promise<RouteDeparture[]> {
+  async getArchivedDepartures(token: string, operation: string | null, startDate: string, endDate: string): Promise<RouteDeparture[]> {
     try {
       const siteId = await getResolvedSiteId(token);
       const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
@@ -336,7 +336,22 @@ export const SharePointService = {
       return (data.value || []).map((item: any) => {
         const f = item.fields;
         return {
-          id: String(item.id), semana: f[resolveFieldName(mapping, 'Semana')] || "", rota: f.Title || "", data: f[colData] ? f[colData].split('T')[0] : "", inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", motorista: f[resolveFieldName(mapping, 'Motorista')] || "", placa: f[resolveFieldName(mapping, 'Placa')] || "", saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", observacao: f[resolveFieldName(mapping, 'Observacao')] || "", statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", operacao: f[colOp] || "", statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", tempo: f[resolveFieldName(mapping, 'TempoGap')] || "OK", createdAt: f.Created || new Date().toISOString()
+          id: String(item.id), 
+          semana: f[resolveFieldName(mapping, 'Semana')] || "", 
+          rota: f.Title || "", 
+          data: f[colData] ? f[colData].split('T')[0] : "", 
+          inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", 
+          motorista: f[resolveFieldName(mapping, 'Motorista')] || "", 
+          placa: f[resolveFieldName(mapping, 'Placa')] || "", 
+          saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", 
+          motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", 
+          observacao: f[resolveFieldName(mapping, 'Observacao')] || "", 
+          statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", 
+          aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", 
+          operacao: f[colOp] || "", 
+          statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", 
+          tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "OK", 
+          createdAt: f.Created || new Date().toISOString()
         };
       });
     } catch (e: any) {
@@ -349,7 +364,7 @@ export const SharePointService = {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const { mapping, internalNames, readOnly } = await getListColumnMapping(siteId, list.id, token);
-    const raw: any = { Title: departure.rota, Semana: departure.semana, DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: departure.inicio, Motorista: departure.motorista, Placa: departure.placa, HorarioSaida: departure.saida, MotivoAtraso: departure.motivo, Observacao: departure.observacao, StatusGeral: departure.statusGeral, Aviso: departure.aviso, Operacao: departure.operacao, StatusOp: departure.statusOp, TempoGap: departure.tempo };
+    const raw: any = { Title: departure.rota, Semana: departure.semana, DataOperacao: departure.data ? new Date(departure.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: departure.inicio, Motorista: departure.motorista, Placa: departure.placa, HorarioSaida: departure.saida, MotivoAtraso: departure.motivo, Observacao: departure.observacao, StatusGeral: departure.statusGeral, Aviso: departure.aviso, Operacao: departure.operacao, StatusOp: departure.statusOp, TempGab: departure.tempo };
     const fields: any = {};
     Object.keys(raw).forEach(k => { const int = resolveFieldName(mapping, k); if (int === 'Title' || (internalNames.has(int) && !readOnly.has(int))) { fields[int] = raw[k]; } });
     const isUpdate = departure.id && departure.id !== "" && departure.id !== "0" && !isNaN(Number(departure.id));
@@ -381,7 +396,7 @@ export const SharePointService = {
 
     for (const item of items) {
         try {
-            const raw: any = { Title: item.rota, Semana: item.semana, DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: item.inicio, Motorista: item.motorista, Placa: item.placa, HorarioSaida: item.saida, MotivoAtraso: item.motivo, Observacao: item.observacao, StatusGeral: item.statusGeral, Aviso: item.aviso, Operacao: item.operacao, StatusOp: item.statusOp, TempoGap: item.tempo };
+            const raw: any = { Title: item.rota, Semana: item.semana, DataOperacao: item.data ? new Date(item.data + 'T12:00:00Z').toISOString() : null, HorarioInicio: item.inicio, Motorista: item.motorista, Placa: item.placa, HorarioSaida: item.saida, MotivoAtraso: item.motivo, Observacao: item.observacao, StatusGeral: item.statusGeral, Aviso: item.aviso, Operacao: item.operacao, StatusOp: item.statusOp, TempGab: item.tempo };
             const histFields: any = {};
             Object.keys(raw).forEach(k => { const int = resolveFieldName(histMapping, k); if (histInternals.has(int)) histFields[int] = raw[k]; });
             const postRes = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items`, token, { method: 'POST', body: JSON.stringify({ fields: histFields }) });
