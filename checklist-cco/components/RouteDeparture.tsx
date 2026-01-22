@@ -20,7 +20,7 @@ const OBSERVATION_TEMPLATES: Record<string, string[]> = {
   'Fábrica': ["Atraso na descarga | Entrada **:**h - Saída **:**h"],
   'Logística': ["Atraso no lavador | Chegada da rota anterior às **:**h - Entrada na fábrica às **:**h", "Motorista adiantou a rota devido à desvios", "Atraso na rota anterior (nome da rota)", "Atraso na rota anterior | Chegada no lavador **:**h - Entrada na fábrica às **:**h", "Falta de material de coleta para realizar a rota"],
   'Mão de obra': ["Atraso do motorista", "Adiantamento do motorista", "A rota iniciou atrasada devido à interjornada do motorista | Atrasou na rota anterior devido à", "Troca do motorista previsto devido à saúde"],
-  'Manutenção': ["Precisou realizar a troca de pneus | Início **:**h - Término **:**h", "Troca de mola | Início **:**h - Término **:**h", "Manutenção na parte elétrica | Início **:**h - Término **:**h", "Manutenção nos freios | Início **:**h - Término **:**h", "Manutenção na bomba de carregamento de leite | Início **:**h - Término **:**h"],
+  'Manutenção': ["Precisou realizar a troca de pneus | Início **:**h - Término **:**h", "Troca de mola | Início **:**h - Término **:**h", "Manutenção na parte elétrica | Início **:**h - Término **:**h", "Manutenção na parte elétrica | Início **:**h - Término **:**h", "Manutenção nos freios | Início **:**h - Término **:**h", "Manutenção na bomba de carregamento de leite | Início **:**h - Término **:**h"],
   'Divergência de Roteirização': ["Horário de saída da rota não atende os produtores", "Horário de saída da rota precisa ser alterado devido à entrada de produtores"],
   'Solicitado pelo Cliente': ["Rota saiu adiantada para realizar socorro", "Cliente solicitou para a rota sair adiantada"],
   'Infraestrutura': []
@@ -124,34 +124,37 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const rDate = new Date(y, m - 1, d);
     rDate.setHours(0, 0, 0, 0);
 
-    // CASO 0: DATA FUTURA
-    if (rDate > today) return { status: 'Programada', gap: '' };
-
     const toleranceSec = timeToSeconds(toleranceStr);
     const startSec = timeToSeconds(inicio);
 
-    // CASO 1: NÃO SAIU AINDA (Saída Vazia ou 00:00:00)
-    if (!saida || saida === '00:00:00' || saida === '') {
-      // Se a data já passou, está atrasada independente do horário
-      if (rDate < today) return { status: 'Atrasada', gap: '' };
+    // CASO 1: SAIU (Saída preenchida) - Prioridade Máxima
+    // Se saiu, calculamos o status real independente de ser data futura ou passada
+    if (saida && saida !== '00:00:00' && saida !== '') {
+        const endSec = timeToSeconds(saida);
+        const diff = endSec - startSec;
+        const gapFormatted = secondsToTime(diff);
 
-      // Se for hoje, checa o horário atual contra o início + tolerância
-      const nowSec = currentTime.getHours() * 3600 + currentTime.getMinutes() * 60 + currentTime.getSeconds();
-      if (nowSec > (startSec + toleranceSec)) {
-        return { status: 'Atrasada', gap: '' };
-      }
-      return { status: 'Pendente', gap: '' };
+        if (diff < -toleranceSec) return { status: 'Adiantada', gap: gapFormatted };
+        if (diff > toleranceSec) return { status: 'Atrasada', gap: gapFormatted };
+
+        return { status: 'OK', gap: gapFormatted };
     }
 
-    // CASO 2: SAIU (Saída preenchida)
-    const endSec = timeToSeconds(saida);
-    const diff = endSec - startSec;
-    const gapFormatted = secondsToTime(diff);
+    // CASO 2: NÃO SAIU AINDA (Saída VAZIA ou 00:00:00)
+    
+    // 2.1: Data Futura -> Programada
+    if (rDate > today) return { status: 'Programada', gap: '' };
 
-    if (diff < -toleranceSec) return { status: 'Adiantada', gap: gapFormatted };
-    if (diff > toleranceSec) return { status: 'Atrasada', gap: gapFormatted };
+    // 2.2: Data Passada -> Atrasada (pois já devia ter saído)
+    if (rDate < today) return { status: 'Atrasada', gap: '' };
 
-    return { status: 'OK', gap: gapFormatted };
+    // 2.3: Hoje -> Verifica contra horário atual + tolerância
+    const nowSec = currentTime.getHours() * 3600 + currentTime.getMinutes() * 60 + currentTime.getSeconds();
+    if (nowSec > (startSec + toleranceSec)) {
+        return { status: 'Atrasada', gap: '' };
+    }
+    
+    return { status: 'Pendente', gap: '' };
   };
 
   const formatTimeInput = (value: string): string => {
@@ -200,7 +203,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const token = getAccessToken();
     setIsSyncing(true);
     let success = 0;
-    for (const id of Array.from(selectedIds)) {
+    // Fix: Explicitly cast Array.from result to string[] to resolve 'unknown' type issue during iteration
+    const idsToProcess = Array.from(selectedIds) as string[];
+    for (const id of idsToProcess) {
         try { await SharePointService.deleteDeparture(token, id); success++; } catch (e) {}
     }
     setRoutes(prev => prev.filter(r => !selectedIds.has(r.id!)));
@@ -294,7 +299,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
     updatedRoute.statusOp = status;
     updatedRoute.tempo = gap;
-    if (status !== 'Atrasada' && status !== 'Adiantada') { updatedRoute.motivo = ""; updatedRoute.observacao = ""; }
+    if (status !== 'Atrasada' && status !== 'Adiantada' && status !== 'Programada') { updatedRoute.motivo = ""; updatedRoute.observacao = ""; }
     setRoutes(prev => prev.map(r => r.id === id ? updatedRoute : r));
     setIsSyncing(true);
     try { await SharePointService.updateDeparture(getAccessToken(), updatedRoute); } catch (e) {} finally { setIsSyncing(false); }
@@ -304,7 +309,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (route.id === 'ghost') return "bg-slate-50 dark:bg-slate-900 italic text-slate-400";
     const status = route.statusOp;
     
-    // ⚪ PROGRAMADA (Data Futura)
+    // ⚪ PROGRAMADA (Data Futura e Sem Saída)
     if (status === 'Programada') {
         return "bg-slate-100 dark:bg-slate-800 border-l-4 border-slate-400 text-slate-500 dark:text-slate-400";
     }
@@ -414,6 +419,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   const rowStyle = getRowStyle(route);
                   const isGhost = route.id === 'ghost';
                   const isSelected = selectedIds.has(route.id!);
+                  
+                  // Determinamos se a cor de texto deve ser branca (para atrasos preenchidos) ou normal
                   const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
                   const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
                   
@@ -432,16 +439,26 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.inicio} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('inicio', rowIndex, val); } }} onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.motorista} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('motorista', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} className={`${inputClass}`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.placa} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('placa', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.saida} placeholder="--:--:--" onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }} onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
-                        {isDelayed && (
+                        <input 
+                            type="text" 
+                            value={route.saida} 
+                            placeholder="--:--:--" 
+                            onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }} 
+                            onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} 
+                            onChange={(e) => updateCell(route.id!, 'saida', e.target.value)}
+                            className={`${inputClass} font-mono text-center`} 
+                        />
+                      </td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                        {(isDelayed || route.statusOp === 'Programada') && !isGhost && (
                           <select value={route.motivo} onChange={(e) => updateCell(route.id!, 'motivo', e.target.value)} className="w-full bg-white/20 dark:bg-slate-800/20 border-none px-2 py-1 text-[10px] font-bold text-inherit outline-none appearance-none cursor-pointer">
                               <option value="" className="text-slate-800">---</option>{MOTIVOS.map(m => (<option key={m} value={m} className="text-slate-800">{m}</option>))}
                           </select>
                         )}
                       </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 relative align-top">
-                        {isDelayed && (
+                        {(isDelayed || route.statusOp === 'Programada') && !isGhost && (
                           <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
                             <textarea value={route.observacao || ""} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('observacao', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id!)} placeholder="..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal' : 'truncate pr-8'}`} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
                             {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id!); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 opacity-60"><ChevronDown size={14} /></button>}
@@ -482,7 +499,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       {isBulkMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 shadow-2xl animate-in zoom-in">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-md border border-primary-500 shadow-2xl animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><Layers size={24} /> Atribuir Planta para Lote</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Você colou <span className="text-primary-500 font-black">{pendingBulkRoutes.length} rotas</span>. Escolha a operação:</p>
                   <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 scrollbar-thin">
@@ -495,7 +512,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       {isMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 animate-in zoom-in">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-md border border-primary-500 animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><LinkIcon size={24} /> Vínculo Necessário</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">A rota <span className="text-primary-500 font-black">{pendingMappingRoute}</span> não possui planta vinculada:</p>
                   <div className="grid grid-cols-2 gap-3">
