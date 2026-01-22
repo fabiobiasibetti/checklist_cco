@@ -8,7 +8,8 @@ import {
   Filter, Search, CheckSquare, Square,
   BarChart3, TrendingUp,
   Activity, ChevronRight, AlignLeft,
-  Archive, Database, Save, Link as LinkIcon
+  Archive, Database, Save, Link as LinkIcon,
+  Layers
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -56,6 +57,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [isSyncing, setIsSyncing] = useState(false);
   const [zoomLevel] = useState(0.9);
   
+  // Bulk state
+  const [bulkStatus, setBulkStatus] = useState<{ active: boolean, current: number, total: number } | null>(null);
+
   // Ghost Row State
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
     id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'OK', tempo: 'OK'
@@ -105,7 +109,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   useEffect(() => { loadData(); }, [currentUser]);
 
-  // Excel-like resizing logic
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (resizingRef.current) {
@@ -166,12 +169,80 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     return { gap: gapFormatted, status };
   };
 
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const processBulkRoutes = async (text: string, baseData: Partial<RouteDeparture>) => {
+      const lines = text.split(/[\n;]/).map(l => l.trim()).filter(Boolean);
+      if (lines.length <= 1) return null;
+
+      const token = getAccessToken();
+      const total = lines.length;
+      setBulkStatus({ active: true, current: 0, total });
+
+      const newRoutes: RouteDeparture[] = [];
+      const config = userConfigs.find(c => c.operacao === baseData.operacao);
+
+      for (let i = 0; i < total; i++) {
+          const rotaName = lines[i];
+          setBulkStatus(prev => prev ? { ...prev, current: i + 1 } : null);
+
+          // Tenta mapear operação automaticamente se não estiver definida na Ghost Row
+          let op = baseData.operacao || '';
+          if (!op) {
+              const mapping = routeMappings.find(m => m.Title === rotaName);
+              if (mapping) op = mapping.OPERACAO;
+          }
+
+          const { gap, status } = calculateGap(baseData.inicio || '00:00:00', baseData.saida || '00:00:00', config?.tolerancia);
+          
+          const payload: RouteDeparture = {
+              ...baseData,
+              id: '', // Novo item
+              rota: rotaName,
+              operacao: op || 'GERAL',
+              statusOp: status,
+              tempo: gap,
+              createdAt: new Date().toISOString()
+          } as RouteDeparture;
+
+          try {
+              const newId = await SharePointService.updateDeparture(token, payload);
+              newRoutes.push({ ...payload, id: newId });
+          } catch (e) {
+              console.error(`Erro na rota ${rotaName}`, e);
+          }
+      }
+
+      setRoutes(prev => [...prev, ...newRoutes]);
+      setBulkStatus(null);
+      alert(`${newRoutes.length} rotas criadas com sucesso para ${baseData.operacao || 'a planta selecionada'}!`);
+      
+      setGhostRow({
+          id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'OK', tempo: 'OK'
+      });
+
+      return true;
+  };
+
   const handleGhostRowEdit = async (field: keyof RouteDeparture, value: string) => {
     const token = getAccessToken();
+    
+    // Detecta colagem múltipla
+    if (field === 'rota' && (value.includes('\n') || value.includes(';'))) {
+        await processBulkRoutes(value, ghostRow);
+        return;
+    }
+
     const updatedGhost = { ...ghostRow, [field]: value };
     
-    // Tenta vincular operação automaticamente
-    if (field === 'rota') {
+    if (field === 'rota' && value !== "") {
         const mapping = routeMappings.find(m => m.Title === value);
         if (mapping) {
             updatedGhost.operacao = mapping.OPERACAO;
@@ -181,8 +252,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         }
     }
 
-    // Se já temos a rota, inicia o salvamento
-    if (updatedGhost.rota) {
+    // Salvamento normal se não for bulk e tiver rota
+    if (field !== 'rota' && updatedGhost.rota && updatedGhost.rota !== "") {
         setIsSyncing(true);
         try {
             const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
@@ -191,8 +262,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             
             const newId = await SharePointService.updateDeparture(token, payload);
             setRoutes(prev => [...prev, { ...payload, id: newId }]);
-            
-            // Reseta Ghost Row para nova entrada
             setGhostRow({
               id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '00:00:00', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'OK', tempo: 'OK'
             });
@@ -226,21 +295,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     setRoutes(prev => prev.map(r => r.id === id ? updatedRoute : r));
     setIsSyncing(true);
     try { await SharePointService.updateDeparture(token, updatedRoute); } catch (e) { console.error(e); } finally { setIsSyncing(false); }
-  };
-
-  /**
-   * Fix: Added toggleSelection function which was missing in original code.
-   */
-  const toggleSelection = (id: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
   };
 
   const handleMappingSave = async (op: string) => {
@@ -283,7 +337,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     setIsSearchingArchive(true);
     try {
         const results = await SharePointService.getArchivedDepartures(token, '', histStart, histEnd);
-        // Filtrar apenas o que o usuário logado tem permissão
         const myOps = new Set(userConfigs.map(c => c.operacao));
         setArchivedResults(results.filter(r => myOps.has(r.operacao)));
     } catch (err) { alert("Erro na busca."); }
@@ -306,8 +359,28 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   if (isLoading) return <div className="h-full flex flex-col items-center justify-center text-primary-500 gap-4"><Loader2 size={48} className="animate-spin" /><p className="font-bold text-[10px] uppercase tracking-widest">CCO Logística...</p></div>;
 
   return (
-    <div className="flex flex-col h-full bg-[#020617] p-4 overflow-hidden select-none font-sans animate-fade-in">
-      {/* TOOLBAR REFORMADA */}
+    <div className="flex flex-col h-full bg-[#020617] p-4 overflow-hidden select-none font-sans animate-fade-in relative">
+      
+      {/* BULK PROGRESS OVERLAY */}
+      {bulkStatus?.active && (
+          <div className="absolute inset-0 z-[500] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-300">
+              <div className="bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-primary-500 shadow-2xl flex flex-col items-center gap-6 max-w-sm w-full">
+                  <div className="relative">
+                      <Loader2 size={64} className="text-primary-600 animate-spin" />
+                      <Layers size={24} className="absolute inset-0 m-auto text-primary-400" />
+                  </div>
+                  <div className="text-center">
+                      <h3 className="text-lg font-black uppercase text-slate-800 dark:text-white">Processando Lista</h3>
+                      <p className="text-xs text-slate-400 font-bold uppercase mt-1 tracking-widest">Criando {bulkStatus.current} de {bulkStatus.total}</p>
+                  </div>
+                  <div className="w-full bg-slate-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                      <div className="h-full bg-primary-600 transition-all duration-300" style={{ width: `${(bulkStatus.current / bulkStatus.total) * 100}%` }}></div>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* TOOLBAR */}
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg"><Clock size={20} /></div>
@@ -351,7 +424,24 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   return (
                     <tr key={route.id} className={`${isSelected ? 'bg-primary-600/20' : rowStyle} group transition-all h-auto`}>
                       <td className={`p-0 border border-slate-300 dark:border-slate-700 cursor-pointer w-[35px] ${isSelected ? 'bg-primary-600' : 'hover:bg-slate-200 dark:hover:bg-slate-700'}`} onClick={() => !isGhost && toggleSelection(route.id!)}></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.rota} placeholder={isGhost ? "Digite p/ criar..." : ""} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black`} /></td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                          {isGhost ? (
+                              <textarea
+                                rows={1}
+                                value={route.rota}
+                                placeholder="Digite p/ criar..."
+                                onChange={(e) => updateCell(route.id!, 'rota', e.target.value)}
+                                onInput={(e) => {
+                                    const el = e.target as HTMLTextAreaElement;
+                                    el.style.height = 'auto';
+                                    el.style.height = (el.scrollHeight) + 'px';
+                                }}
+                                className={`${inputClass} font-black resize-none overflow-hidden min-h-[38px]`}
+                              />
+                          ) : (
+                              <input type="text" value={route.rota} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black`} />
+                          )}
+                      </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="date" value={route.data} onChange={(e) => updateCell(route.id!, 'data', e.target.value)} className={`${inputClass} text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.inicio} onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} className={`${inputClass}`} /></td>

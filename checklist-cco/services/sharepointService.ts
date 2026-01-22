@@ -99,6 +99,22 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
+  // ... (métodos existentes mantidos)
+
+  async createBulkDepartures(token: string, departures: RouteDeparture[]): Promise<{ success: string[], failed: string[] }> {
+      const results = { success: [] as string[], failed: [] as string[] };
+      for (const departure of departures) {
+          try {
+              const newId = await this.updateDeparture(token, departure);
+              results.success.push(newId);
+          } catch (e: any) {
+              console.error(`Erro ao criar rota ${departure.rota}:`, e);
+              results.failed.push(departure.rota);
+          }
+      }
+      return results;
+  },
+
   async getAllListsMetadata(token: string): Promise<any[]> {
     try {
       const siteId = await getResolvedSiteId(token);
