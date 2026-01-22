@@ -9,7 +9,7 @@ import {
   BarChart3, TrendingUp,
   Activity, ChevronRight, AlignLeft,
   Archive, Database, Save, Link as LinkIcon,
-  Layers, Trash2, Settings2
+  Layers, Trash2, Settings2, Check
 } from 'lucide-react';
 
 const MOTIVOS = [
@@ -123,7 +123,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const toleranceSec = timeToSeconds(toleranceStr);
     const startSec = timeToSeconds(inicio);
 
-    // Se saiu, calculamos o status real independente de ser data futura ou passada
     if (saida && saida !== '00:00:00' && saida !== '') {
         const endSec = timeToSeconds(saida);
         const diff = endSec - startSec;
@@ -135,7 +134,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         return { status: 'OK', gap: gapFormatted };
     }
 
-    // Caso não tenha saído:
     if (rDate > today) return { status: 'Programada', gap: '' };
     if (rDate < today) return { status: 'Atrasada', gap: '' };
 
@@ -152,9 +150,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     if (!clean) return '';
     const parts = clean.split(':').map(p => p.trim()).filter(Boolean);
     
-    // Heurística de auto-preenchimento
     let h = '00', m = '00', s = '00';
-    
     if (parts.length >= 1) h = parts[0].padStart(2, '0').substring(0, 2);
     if (parts.length >= 2) m = parts[1].padStart(2, '0').substring(0, 2);
     if (parts.length >= 3) s = parts[2].padStart(2, '0').substring(0, 2);
@@ -287,7 +283,6 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const route = routes.find(r => r.id === id);
     if (!route) return;
     
-    // REMOVIDO: Formatação automática aqui dentro. A formatação ocorre no UI event (onBlur).
     let updatedRoute = { ...route, [field]: value };
     const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
     const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
@@ -418,35 +413,67 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                             key={route.id + '-inicio'}
                             defaultValue={route.inicio} 
                             placeholder="--:--:--"
-                            onPaste={(e: any) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('inicio', rowIndex, val); } }} 
+                            onPaste={(e: any) => { 
+                                const val = e.clipboardData.getData('text'); 
+                                if (val.includes('\n')) { 
+                                    e.preventDefault(); 
+                                    handleMultilinePaste('inicio', rowIndex, val); 
+                                } 
+                            }} 
                             onBlur={(e) => { 
                                 const formatted = formatTimeInput(e.target.value); 
                                 updateCell(route.id!, 'inicio', formatted); 
                             }} 
-                            onInput={(e: any) => { 
-                                // Limpeza visual imediata, permite digitação livre
-                                e.target.value = e.target.value.replace(/[^0-9:]/g, ''); 
+                            className={`${inputClass} font-mono text-center`} 
+                        />
+                      </td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                        <input 
+                            type="text" 
+                            value={route.motorista} 
+                            onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} 
+                            onPaste={(e: any) => { 
+                                const val = e.clipboardData.getData('text'); 
+                                if (val.includes('\n')) { 
+                                    e.preventDefault(); 
+                                    handleMultilinePaste('motorista', rowIndex, val); 
+                                } 
+                            }}
+                            className={`${inputClass}`} 
+                        />
+                      </td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700">
+                        <input 
+                            type="text" 
+                            value={route.placa} 
+                            onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} 
+                            onPaste={(e: any) => { 
+                                const val = e.clipboardData.getData('text'); 
+                                if (val.includes('\n')) { 
+                                    e.preventDefault(); 
+                                    handleMultilinePaste('placa', rowIndex, val); 
+                                } 
                             }}
                             className={`${inputClass} font-mono text-center`} 
                         />
                       </td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} className={`${inputClass}`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.placa} onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
                         <input 
                             type="text" 
                             key={route.id + '-saida'}
                             defaultValue={route.saida} 
                             placeholder="--:--:--" 
-                            onPaste={(e: any) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }} 
+                            onPaste={(e: any) => { 
+                                const val = e.clipboardData.getData('text'); 
+                                if (val.includes('\n')) { 
+                                    e.preventDefault(); 
+                                    handleMultilinePaste('saida', rowIndex, val); 
+                                } 
+                            }} 
                             onBlur={(e) => { 
                                 const formatted = formatTimeInput(e.target.value); 
                                 updateCell(route.id!, 'saida', formatted); 
                             }} 
-                            onInput={(e: any) => {
-                                // Limpeza visual imediata, permite digitação livre
-                                e.target.value = e.target.value.replace(/[^0-9:]/g, '');
-                            }}
                             className={`${inputClass} font-mono text-center`} 
                         />
                       </td>
