@@ -58,10 +58,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [zoomLevel] = useState(0.9);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  // Bulk state para criação de rotas
   const [bulkStatus, setBulkStatus] = useState<{ active: boolean, current: number, total: number } | null>(null);
   const [pendingBulkRoutes, setPendingBulkRoutes] = useState<string[]>([]);
   const [isBulkMappingModalOpen, setIsBulkMappingModalOpen] = useState(false);
 
+  // Ghost Row State - Saída inicia VAZIA e status Programada
   const [ghostRow, setGhostRow] = useState<Partial<RouteDeparture>>({
     id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Programada', tempo: '', semana: ''
   });
@@ -84,11 +86,13 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string[]>>({});
   const [colWidths, setColWidths] = useState<Record<string, number>>({ rota: 140, data: 125, inicio: 95, motorista: 230, placa: 100, saida: 95, motivo: 170, observacao: 400, geral: 70, operacao: 140, status: 90, tempo: 90 });
 
+  const filterRef = useRef<HTMLDivElement>(null);
   const obsDropdownRef = useRef<HTMLDivElement>(null);
   const resizingRef = useRef<{ col: string; startX: number; startWidth: number } | null>(null);
 
   const getAccessToken = (): string => (window as any).__access_token || '';
 
+  // Atualiza o relógio interno para cálculos de atraso em tempo real
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 30000);
     return () => clearInterval(timer);
@@ -123,6 +127,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const toleranceSec = timeToSeconds(toleranceStr);
     const startSec = timeToSeconds(inicio);
 
+    // CASO 1: SAIU (Saída preenchida) - Prioridade Máxima
+    // Se saiu, calculamos o status real independente de ser data futura ou passada
     if (saida && saida !== '00:00:00' && saida !== '') {
         const endSec = timeToSeconds(saida);
         const diff = endSec - startSec;
@@ -134,9 +140,15 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         return { status: 'OK', gap: gapFormatted };
     }
 
+    // CASO 2: NÃO SAIU AINDA (Saída VAZIA ou 00:00:00)
+    
+    // 2.1: Data Futura -> Programada
     if (rDate > today) return { status: 'Programada', gap: '' };
+
+    // 2.2: Data Passada -> Atrasada (pois já devia ter saído)
     if (rDate < today) return { status: 'Atrasada', gap: '' };
 
+    // 2.3: Hoje -> Verifica contra horário atual + tolerância
     const nowSec = currentTime.getHours() * 3600 + currentTime.getMinutes() * 60 + currentTime.getSeconds();
     if (nowSec > (startSec + toleranceSec)) {
         return { status: 'Atrasada', gap: '' };
@@ -148,13 +160,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const formatTimeInput = (value: string): string => {
     let clean = (value || "").replace(/[^0-9:]/g, '');
     if (!clean) return '';
-    const parts = clean.split(':').map(p => p.trim()).filter(Boolean);
-    
-    let h = '00', m = '00', s = '00';
-    if (parts.length >= 1) h = parts[0].padStart(2, '0').substring(0, 2);
-    if (parts.length >= 2) m = parts[1].padStart(2, '0').substring(0, 2);
-    if (parts.length >= 3) s = parts[2].padStart(2, '0').substring(0, 2);
-
+    const parts = clean.split(':');
+    let h = (parts[0] || '00').padStart(2, '0').substring(0, 2);
+    let m = (parts[1] || '00').padStart(2, '0').substring(0, 2);
+    let s = (parts[2] || '00').padStart(2, '0').substring(0, 2);
     return `${h}:${m}:${s}`;
   };
 
@@ -194,6 +203,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const token = getAccessToken();
     setIsSyncing(true);
     let success = 0;
+    // Fix: Explicitly cast Array.from result to string[] to resolve 'unknown' type issue during iteration
     const idsToProcess = Array.from(selectedIds) as string[];
     for (const id of idsToProcess) {
         try { await SharePointService.deleteDeparture(token, id); success++; } catch (e) {}
@@ -222,11 +232,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
     const config = userConfigs.find(c => c.operacao === operacao);
     for (let i = 0; i < total; i++) {
         const rotaName = pendingBulkRoutes[i];
-        setBulkStatus((prev: any) => prev ? { ...prev, current: i + 1 } : null);
-        const startFormatted = formatTimeInput(ghostRow.inicio || '00:00:00');
-        const endFormatted = formatTimeInput(ghostRow.saida || '');
-        const { status, gap } = calculateStatusWithTolerance(startFormatted, endFormatted, config?.tolerancia || "00:00:00", ghostRow.data || "");
-        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, inicio: startFormatted, saida: endFormatted, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+        setBulkStatus((prev: { active: boolean, current: number, total: number } | null) => prev ? { ...prev, current: i + 1 } : null);
+        const { status, gap } = calculateStatusWithTolerance(ghostRow.inicio || '00:00:00', ghostRow.saida || '', config?.tolerancia || "00:00:00", ghostRow.data || "");
+        const payload: RouteDeparture = { ...ghostRow, id: '', rota: rotaName, operacao: operacao, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
         try { const newId = await SharePointService.updateDeparture(token, payload); newRoutes.push({ ...payload, id: newId }); } catch (e) {}
     }
     setRoutes(prev => [...prev, ...newRoutes]);
@@ -258,11 +266,11 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   const updateCell = async (id: string, field: keyof RouteDeparture, value: string) => {
     if (id === 'ghost') {
-        const updatedGhost = { ...ghostRow, [field]: value };
         if (field === 'rota' && (value.includes('\n') || value.includes(';'))) {
             const lines = value.split(/[\n;]/).map(l => l.trim()).filter(Boolean);
             if (lines.length > 1) { setPendingBulkRoutes(lines); setIsBulkMappingModalOpen(true); return; }
         }
+        const updatedGhost = { ...ghostRow, [field]: value };
         if (field === 'rota' && value !== "") {
             const mapping = routeMappings.find(m => m.Title === value);
             if (mapping) updatedGhost.operacao = mapping.OPERACAO;
@@ -272,10 +280,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
             setIsSyncing(true);
             try {
                 const config = userConfigs.find(c => c.operacao === updatedGhost.operacao);
-                const startFormatted = formatTimeInput(updatedGhost.inicio || '00:00:00');
-                const endFormatted = formatTimeInput(updatedGhost.saida || '');
-                const { status, gap } = calculateStatusWithTolerance(startFormatted, endFormatted, config?.tolerancia || "00:00:00", updatedGhost.data || "");
-                const payload = { ...updatedGhost, inicio: startFormatted, saida: endFormatted, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
+                const { status, gap } = calculateStatusWithTolerance(updatedGhost.inicio || '00:00:00', updatedGhost.saida || '', config?.tolerancia || "00:00:00", updatedGhost.data || "");
+                const payload = { ...updatedGhost, statusOp: status, tempo: gap, createdAt: new Date().toISOString() } as RouteDeparture;
                 const newId = await SharePointService.updateDeparture(getAccessToken(), payload);
                 setRoutes(prev => [...prev, { ...payload, id: newId }]);
                 setGhostRow({ id: 'ghost', rota: '', data: new Date().toISOString().split('T')[0], inicio: '00:00:00', saida: '', motorista: '', placa: '', statusGeral: 'OK', aviso: 'NÃO', operacao: '', statusOp: 'Programada', tempo: '' });
@@ -286,10 +292,8 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
     const route = routes.find(r => r.id === id);
     if (!route) return;
-    
     let finalValue = value;
     if (field === 'inicio' || field === 'saida') finalValue = formatTimeInput(value);
-    
     let updatedRoute = { ...route, [field]: finalValue };
     const config = userConfigs.find(c => c.operacao === updatedRoute.operacao);
     const { status, gap } = calculateStatusWithTolerance(updatedRoute.inicio, updatedRoute.saida, config?.tolerancia || "00:00:00", updatedRoute.data);
@@ -304,14 +308,25 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const getRowStyle = (route: RouteDeparture | Partial<RouteDeparture>) => {
     if (route.id === 'ghost') return "bg-slate-50 dark:bg-slate-900 italic text-slate-400";
     const status = route.statusOp;
-    if (status === 'Programada') return "bg-slate-100 dark:bg-slate-800 border-l-4 border-slate-400 text-slate-500 dark:text-slate-400";
+    
+    // ⚪ PROGRAMADA (Data Futura e Sem Saída)
+    if (status === 'Programada') {
+        return "bg-slate-100 dark:bg-slate-800 border-l-4 border-slate-400 text-slate-500 dark:text-slate-400";
+    }
+
+    // ✅ OK - Verde Soft
     if (status === 'OK') return "bg-emerald-50 dark:bg-emerald-900/10 border-l-4 border-emerald-600";
+    
+    // ⏰ ATRASADA SEM SAÍDA (Amarelo de Alerta)
     if (status === 'Atrasada' && (!route.saida || route.saida === '00:00:00' || route.saida === '')) {
       return "bg-yellow-300 dark:bg-yellow-500/30 text-slate-900 dark:text-yellow-100 font-bold border-l-[12px] border-yellow-600 shadow-lg";
     }
+    
+    // 🟠 ATRASADA COM SAÍDA OU ADIANTADA (Laranja Operacional)
     if (status === 'Atrasada' || status === 'Adiantada') {
       return "bg-orange-500 dark:bg-orange-600/30 text-white font-bold border-l-[12px] border-orange-700 shadow-lg";
     }
+    
     return "bg-white dark:bg-slate-900 border-l-4 border-transparent";
   };
 
@@ -352,6 +367,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
   return (
     <div className="flex flex-col h-full bg-[#020617] p-4 overflow-hidden select-none font-sans animate-fade-in relative">
+      
       {bulkStatus?.active && (
           <div className="fixed inset-0 z-[500] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-300">
               <div className="bg-white dark:bg-slate-900 p-8 rounded-[2.5rem] border border-primary-500 shadow-2xl flex flex-col items-center gap-6 max-w-sm w-full">
@@ -365,7 +381,10 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       <div className="flex justify-between items-center mb-6 shrink-0 px-2">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-primary-600 text-white rounded-2xl shadow-lg"><Clock size={20} /></div>
-          <div><h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">Controle de Saídas {isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}</h2><p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={12} className="text-emerald-500"/> Operador: {currentUser.name}</p></div>
+          <div>
+            <h2 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3">Controle de Saídas {isSyncing && <Loader2 size={16} className="animate-spin text-primary-500"/>}</h2>
+            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-2"><ShieldCheck size={12} className="text-emerald-500"/> Operador: {currentUser.name}</p>
+          </div>
         </div>
         <div className="flex gap-2 items-center">
           <button onClick={() => setIsTextWrapEnabled(!isTextWrapEnabled)} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold border uppercase text-[10px] transition-all ${isTextWrapEnabled ? 'bg-primary-600 text-white border-primary-600' : 'bg-slate-800 text-slate-300 border-slate-700'}`}><AlignLeft size={16} /> Quebra</button>
@@ -400,53 +419,34 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                   const rowStyle = getRowStyle(route);
                   const isGhost = route.id === 'ghost';
                   const isSelected = selectedIds.has(route.id!);
+                  
+                  // Determinamos se a cor de texto deve ser branca (para atrasos preenchidos) ou normal
                   const isDelayed = route.statusOp === 'Atrasada' || route.statusOp === 'Adiantada';
                   const isDelayedFilled = isDelayed && (route.saida !== '' && route.saida !== '00:00:00');
+                  
                   const inputClass = `w-full h-full bg-transparent outline-none border-none px-3 py-2 text-[11px] font-semibold uppercase transition-all ${isDelayedFilled ? 'text-white placeholder-white/50' : 'text-slate-800 dark:text-slate-200 placeholder-slate-400'}`;
 
                   return (
                     <tr key={route.id} className={`${isSelected ? 'bg-primary-600/20' : rowStyle} group transition-all h-auto`}>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
                           {isGhost ? (
-                              <textarea rows={1} value={route.rota} placeholder="Digite p/ criar..." onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} onInput={(e: any) => { e.target.style.height = 'auto'; e.target.style.height = (e.target.scrollHeight) + 'px'; }} className={`${inputClass} font-black resize-none overflow-hidden min-h-[38px]`} />
+                              <textarea rows={1} value={route.rota} placeholder="Digite p/ criar..." onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} onInput={(e) => { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = (el.scrollHeight) + 'px'; }} className={`${inputClass} font-black resize-none overflow-hidden min-h-[38px]`} />
                           ) : (
                               <input type="text" value={route.rota} onChange={(e) => updateCell(route.id!, 'rota', e.target.value)} className={`${inputClass} font-black`} />
                           )}
                       </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="date" value={route.data} onChange={(e) => updateCell(route.id!, 'data', e.target.value)} className={`${inputClass} text-center`} /></td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.inicio} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('inicio', rowIndex, val); } }} onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.motorista} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('motorista', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} className={`${inputClass}`} /></td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.placa} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('placa', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700">
                         <input 
                             type="text" 
-                            key={route.id + '-inicio'}
-                            defaultValue={route.inicio} 
-                            placeholder="--:--:--"
-                            onPaste={(e: any) => { 
-                              const val = e.clipboardData.getData('text'); 
-                              if (val.includes('\n')) { 
-                                e.preventDefault(); 
-                                handleMultilinePaste('inicio', rowIndex, val); 
-                              } 
-                            }} 
-                            onBlur={(e) => updateCell(route.id!, 'inicio', e.target.value)} 
-                            className={`${inputClass} font-mono text-center`} 
-                        />
-                      </td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.motorista} onChange={(e) => updateCell(route.id!, 'motorista', e.target.value)} className={`${inputClass}`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700"><input type="text" value={route.placa} onChange={(e) => updateCell(route.id!, 'placa', e.target.value)} className={`${inputClass} font-mono text-center`} /></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700">
-                        <input 
-                            type="text" 
-                            key={route.id + '-saida'}
-                            defaultValue={route.saida} 
+                            value={route.saida} 
                             placeholder="--:--:--" 
-                            onPaste={(e: any) => { 
-                              const val = e.clipboardData.getData('text'); 
-                              if (val.includes('\n')) { 
-                                e.preventDefault(); 
-                                handleMultilinePaste('saida', rowIndex, val); 
-                              } 
-                            }} 
+                            onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('saida', rowIndex, val); } }} 
                             onBlur={(e) => updateCell(route.id!, 'saida', e.target.value)} 
+                            onChange={(e) => updateCell(route.id!, 'saida', e.target.value)}
                             className={`${inputClass} font-mono text-center`} 
                         />
                       </td>
@@ -460,7 +460,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 relative align-top">
                         {(isDelayed || route.statusOp === 'Programada') && !isGhost && (
                           <div className="flex items-start w-full h-full relative p-0 min-h-[44px]">
-                            <textarea value={route.observacao || ""} onChange={(e) => updateCell(route.id!, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id!)} placeholder="..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal' : 'truncate pr-8'}`} onInput={(e: any) => { if (isTextWrapEnabled) { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; } }} />
+                            <textarea value={route.observacao || ""} onPaste={(e) => { const val = e.clipboardData.getData('text'); if (val.includes('\n')) { e.preventDefault(); handleMultilinePaste('observacao', rowIndex, val); } }} onChange={(e) => updateCell(route.id!, 'observacao', e.target.value)} onFocus={() => setActiveObsId(route.id!)} placeholder="..." className={`w-full h-full min-h-[44px] bg-transparent outline-none border-none px-3 py-2 text-[11px] font-normal resize-none overflow-hidden ${isTextWrapEnabled ? 'whitespace-normal' : 'truncate pr-8'}`} onInput={(e) => { if (isTextWrapEnabled) { const el = e.target as HTMLTextAreaElement; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
                             {!isTextWrapEnabled && <button onClick={(e) => { e.stopPropagation(); setActiveObsId(activeObsId === route.id ? null : route.id!); }} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 opacity-60"><ChevronDown size={14} /></button>}
                             {activeObsId === route.id && (
                               <div ref={obsDropdownRef} className="absolute top-full left-0 w-full z-[110] bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-1">
@@ -472,9 +472,23 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
                       </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><select value={route.statusGeral} onChange={(e) => updateCell(route.id!, 'statusGeral', e.target.value)} className="w-full h-full bg-transparent border-none text-[10px] font-bold text-center appearance-none"><option value="OK">OK</option><option value="NOK">NOK</option></select></td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700"><select value={route.operacao} onChange={(e) => updateCell(route.id!, 'operacao', e.target.value)} className="w-full h-full bg-transparent border-none text-[9px] font-black text-center uppercase"><option value="">OP...</option>{userConfigs.map(c => <option key={c.operacao} value={c.operacao}>{c.operacao}</option>)}</select></td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700 text-center"><span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : 'bg-red-100 border-red-400 text-red-800'}`}>{route.statusOp}</span></td>
+                      <td className="p-0 border border-slate-300 dark:border-slate-700 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[8px] font-black border ${route.statusOp === 'OK' ? 'bg-emerald-100 border-emerald-400 text-emerald-800' : route.statusOp === 'Atrasada' ? 'bg-yellow-100 border-yellow-400 text-yellow-800' : route.statusOp === 'Programada' ? 'bg-slate-200 border-slate-400 text-slate-600' : 'bg-red-100 border-red-400 text-red-800'}`}>{route.statusOp}</span>
+                      </td>
                       <td className="p-0 border border-slate-300 dark:border-slate-700 text-center font-mono font-bold text-[10px]">{route.tempo}</td>
-                      <td className="p-0 border border-slate-300 dark:border-slate-700 flex items-center justify-center gap-1 h-12">{!isGhost && (<><button onClick={() => toggleSelection(route.id!)} className={`p-1.5 rounded-lg transition-colors ${isSelected ? 'text-primary-500 bg-primary-500/10' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>{isSelected ? <CheckSquare size={16}/> : <Square size={16}/>}</button><button onClick={() => handleDeleteRoute(route.id!)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"><Trash2 size={16} /></button></>)}</td>
+                      
+                      <td className="p-0 border border-slate-300 dark:border-slate-700 flex items-center justify-center gap-1 h-12">
+                          {!isGhost && (
+                              <>
+                                <button onClick={() => toggleSelection(route.id!)} className={`p-1.5 rounded-lg transition-colors ${isSelected ? 'text-primary-500 bg-primary-500/10' : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}>
+                                    {isSelected ? <CheckSquare size={16}/> : <Square size={16}/>}
+                                </button>
+                                <button onClick={() => handleDeleteRoute(route.id!)} className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors">
+                                    <Trash2 size={16} />
+                                </button>
+                              </>
+                          )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -485,10 +499,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       {isBulkMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 shadow-2xl animate-in zoom-in">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-md border border-primary-500 shadow-2xl animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><Layers size={24} /> Atribuir Planta para Lote</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Você colou <span className="text-primary-500 font-black">{pendingBulkRoutes.length} rotas</span>. Escolha a operação:</p>
-                  <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 scrollbar-thin">{userConfigs.map(c => ( <button key={c.operacao} onClick={() => handleBulkCreateSave(c.operacao)} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl hover:bg-primary-600 hover:text-white transition-all font-black text-xs uppercase">{c.operacao}</button> ))}</div>
+                  <div className="grid grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-2 scrollbar-thin">
+                      {userConfigs.map(c => ( <button key={c.operacao} onClick={() => handleBulkCreateSave(c.operacao)} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl hover:bg-primary-600 hover:text-white transition-all font-black text-xs uppercase">{c.operacao}</button> ))}
+                  </div>
                   <button onClick={() => setIsBulkMappingModalOpen(false)} className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400">Cancelar</button>
               </div>
           </div>
@@ -496,10 +512,12 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
 
       {isMappingModalOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[300] flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-w-md border border-primary-500 animate-in zoom-in">
+              <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 w-full max-md border border-primary-500 animate-in zoom-in">
                   <div className="flex items-center gap-3 text-primary-500 mb-6 font-black uppercase text-xs"><LinkIcon size={24} /> Vínculo Necessário</div>
                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">A rota <span className="text-primary-500 font-black">{pendingMappingRoute}</span> não possui planta vinculada:</p>
-                  <div className="grid grid-cols-2 gap-3">{userConfigs.map(c => ( <button key={c.operacao} onClick={() => { SharePointService.addRouteOperationMapping(getAccessToken(), pendingMappingRoute!, c.operacao); setGhostRow(prev => ({...prev, operacao: c.operacao})); setIsMappingModalOpen(false); }} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 rounded-2xl hover:bg-primary-600 hover:text-white transition-all font-black text-xs uppercase">{c.operacao}</button> ))}</div>
+                  <div className="grid grid-cols-2 gap-3">
+                      {userConfigs.map(c => ( <button key={c.operacao} onClick={() => { SharePointService.addRouteOperationMapping(getAccessToken(), pendingMappingRoute!, c.operacao); setGhostRow(prev => ({...prev, operacao: c.operacao})); setIsMappingModalOpen(false); }} className="p-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 rounded-2xl hover:bg-primary-600 hover:text-white transition-all font-black text-xs uppercase">{c.operacao}</button> ))}
+                  </div>
                   <button onClick={() => { setIsMappingModalOpen(false); setGhostRow(prev => ({...prev, rota: ''})); }} className="w-full mt-6 py-4 text-[10px] font-black uppercase text-slate-400">Cancelar</button>
               </div>
           </div>
@@ -508,9 +526,27 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
       {isHistoryModalOpen && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex items-center justify-center p-4">
               <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
-                  <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><Database size={24} /><h3 className="font-black uppercase tracking-widest text-base">Histórico Definitivo</h3></div><button onClick={() => setIsHistoryModalOpen(false)}><X size={28} /></button></div>
-                  <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 grid grid-cols-3 gap-4"><input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" /><input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" /><button onClick={handleSearchArchive} disabled={isSearchingArchive} className="py-3 bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-primary-700 shadow-lg">{isSearchingArchive ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} BUSCAR</button></div>
-                  <div className="flex-1 overflow-auto p-4 bg-slate-50 dark:bg-slate-950">{archivedResults.length > 0 ? ( <table className="w-full border-collapse text-[10px]"><thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase"><tr><th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Rota</th><th className="p-2 border border-slate-300 text-center">Data</th><th className="p-2 border border-slate-300 text-center">Saída</th><th className="p-2 border border-slate-300 text-left">Motivo</th><th className="p-2 border border-slate-300 text-center">OP</th></tr></thead><tbody>{archivedResults.map((r, i) => (<tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800"><td className="p-2 font-bold text-primary-700">{r.rota}</td><td className="p-2 text-center">{r.data}</td><td className="p-2 text-center font-mono">{r.saida}</td><td className="p-2">{r.motivo || "---"}</td><td className="p-2 text-center font-black">{r.operacao}</td></tr>))}</tbody></table> ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 italic font-bold">Nenhum dado retornado para este período</div>}</div>
+                  <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white">
+                      <div className="flex items-center gap-4"><Database size={24} /><h3 className="font-black uppercase tracking-widest text-base">Histórico Definitivo</h3></div>
+                      <button onClick={() => setIsHistoryModalOpen(false)}><X size={28} /></button>
+                  </div>
+                  <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 grid grid-cols-3 gap-4">
+                      <input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
+                      <input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" />
+                      <button onClick={handleSearchArchive} disabled={isSearchingArchive} className="py-3 bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-primary-700 shadow-lg"> {isSearchingArchive ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} BUSCAR </button>
+                  </div>
+                  <div className="flex-1 overflow-auto p-4 bg-slate-50 dark:bg-slate-950">
+                      {archivedResults.length > 0 ? (
+                        <table className="w-full border-collapse text-[10px]">
+                            <thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase">
+                                <tr><th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Rota</th><th className="p-2 border border-slate-300 text-center">Data</th><th className="p-2 border border-slate-300 text-center">Saída</th><th className="p-2 border border-slate-300 text-left">Motivo</th><th className="p-2 border border-slate-300 text-center">OP</th></tr>
+                            </thead>
+                            <tbody>
+                                {archivedResults.map((r, i) => (<tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800"><td className="p-2 font-bold text-primary-700">{r.rota}</td><td className="p-2 text-center">{r.data}</td><td className="p-2 text-center font-mono">{r.saida}</td><td className="p-2">{r.motivo || "---"}</td><td className="p-2 text-center font-black">{r.operacao}</td></tr>))}
+                            </tbody>
+                        </table>
+                      ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 italic font-bold">Nenhum dado retornado para este período</div>}
+                  </div>
               </div>
           </div>
       )}
@@ -519,7 +555,9 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-md z-[200] flex items-center justify-center p-4">
             <div className="bg-white dark:bg-slate-900 rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden border dark:border-slate-800 animate-in zoom-in">
                 <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><TrendingUp size={24} /><h3 className="font-black uppercase tracking-widest text-base">Dashboard Operacional</h3></div><button onClick={() => setIsStatsModalOpen(false)}><X size={28} /></button></div>
-                <div className="p-8 grid grid-cols-3 gap-6 bg-slate-50 dark:bg-slate-950">{[{ label: 'Total', value: dashboardStats.total, icon: Activity, color: 'text-slate-700 bg-white' }, { label: 'OK', value: `${Math.round((dashboardStats.okCount / dashboardStats.total) * 100)}%`, icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' }, { label: 'Atrasos', value: `${Math.round((dashboardStats.delayedCount / dashboardStats.total) * 100)}%`, icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' }].map((stat: any, idx) => ( <div key={idx} className={`p-6 rounded-2xl border dark:border-slate-800 flex flex-col gap-2 ${stat.color}`}><stat.icon size={20} /><span className="text-[10px] font-black uppercase text-slate-400 mt-2">{stat.label}</span><div className="text-3xl font-black">{stat.value}</div></div> ))}</div>
+                <div className="p-8 grid grid-cols-3 gap-6 bg-slate-50 dark:bg-slate-950">
+                    {[{ label: 'Total', value: dashboardStats.total, icon: Activity, color: 'text-slate-700 bg-white' }, { label: 'OK', value: `${Math.round((dashboardStats.okCount / dashboardStats.total) * 100)}%`, icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50' }, { label: 'Atrasos', value: `${Math.round((dashboardStats.delayedCount / dashboardStats.total) * 100)}%`, icon: AlertTriangle, color: 'text-orange-600 bg-orange-50' }].map((stat, idx) => ( <div key={idx} className={`p-6 rounded-2xl border dark:border-slate-800 flex flex-col gap-2 ${stat.color}`}><stat.icon size={20} /><span className="text-[10px] font-black uppercase text-slate-400 mt-2">{stat.label}</span><div className="text-3xl font-black">{stat.value}</div></div> ))}
+                </div>
             </div>
         </div>
       )}
