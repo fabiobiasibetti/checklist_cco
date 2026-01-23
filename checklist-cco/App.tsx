@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react';
+import { CheckSquare, History, Truck, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Loader2, Search, LayoutDashboard, TowerControl } from 'lucide-react';
 import TaskManager from './components/TaskManager';
 import HistoryViewer from './components/HistoryViewer';
 import RouteDepartureView from './components/RouteDeparture';
 import SharePointExplorer from './components/SharePointExplorer';
+import SendReportView from './components/SendReportView';
 import Login from './components/Login';
 import { SharePointService } from './services/sharepointService';
 import { logout as msalLogout } from './services/authService';
@@ -141,6 +142,7 @@ const AppContent = () => {
         <nav className="flex-1 space-y-2">
           <SidebarLink to="/" icon={CheckSquare} label="Checklist" active={window.location.hash === '#/'} collapsed={collapsed} />
           <SidebarLink to="/departures" icon={Truck} label="Saídas" active={window.location.hash === '#/departures'} collapsed={collapsed} />
+          <SidebarLink to="/resumo" icon={TowerControl} label="Resumo" active={window.location.hash === '#/resumo'} collapsed={collapsed} />
           <SidebarLink to="/history" icon={History} label="Histórico" active={window.location.hash === '#/history'} collapsed={collapsed} />
           <SidebarLink to="/explorer" icon={Search} label="Explorador" active={window.location.hash === '#/explorer'} collapsed={collapsed} />
         </nav>
@@ -176,6 +178,7 @@ const AppContent = () => {
               />
             } />
             <Route path="/departures" element={<RouteDepartureView currentUser={currentUser} />} />
+            <Route path="/resumo" element={<SendReportView currentUser={currentUser} />} />
             <Route path="/history" element={<HistoryViewer currentUser={currentUser} />} />
             <Route path="/explorer" element={<SharePointExplorer currentUser={currentUser} />} />
           </Routes>
