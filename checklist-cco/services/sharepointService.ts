@@ -27,7 +27,8 @@ async function graphFetch(endpoint: string, token: string, options: RequestInit 
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
-    'Prefer': 'HonorNonIndexedQueriesWarningMayFailOverLargeLists'
+    // Adicionado HonorNonIndexedQueriesWarningMayFailRandomly para corrigir erro de coluna não indexada (DataOperacao)
+    'Prefer': 'HonorNonIndexedQueriesWarningMayFailOverLargeLists, HonorNonIndexedQueriesWarningMayFailRandomly'
   };
 
   const res = await fetch(url, { ...options, headers: { ...headers, ...options.headers } });
@@ -307,7 +308,6 @@ export const SharePointService = {
       const colData = resolveFieldName(mapping, 'DataOperacao');
       const colOp = resolveFieldName(mapping, 'Operacao');
       
-      // SharePoint filters on dates work best with YYYY-MM-DDT00:00:00Z format in Graph API
       let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
       if (operation) {
           filter += ` and fields/${colOp} eq '${operation}'`;
@@ -475,7 +475,6 @@ export const SharePointService = {
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
   },
 
-  // Added missing method for SharePointExplorer component to view list and column metadata.
   async getAllListsMetadata(token: string): Promise<any[]> {
     const siteId = await getResolvedSiteId(token);
     const results: any[] = [];
