@@ -102,39 +102,6 @@ function resolveFieldName(mapping: Record<string, string>, target: string): stri
 }
 
 export const SharePointService = {
-  // ... (métodos existentes mantidos)
-
-  async createBulkDepartures(token: string, departures: RouteDeparture[]): Promise<{ success: string[], failed: string[] }> {
-      const results = { success: [] as string[], failed: [] as string[] };
-      for (const departure of departures) {
-          try {
-              const newId = await this.updateDeparture(token, departure);
-              results.success.push(newId);
-          } catch (e: any) {
-              console.error(`Erro ao criar rota ${departure.rota}:`, e);
-              results.failed.push(departure.rota);
-          }
-      }
-      return results;
-  },
-
-  async getAllListsMetadata(token: string): Promise<any[]> {
-    try {
-      const siteId = await getResolvedSiteId(token);
-      const listsToExplore = ['Tarefas_Checklist', 'Operacoes_Checklist', 'Status_Checklist', 'Historico_checklist_web', 'Usuarios_cco', 'CONFIG_SAIDA_DE_ROTAS', 'Dados_Saida_de_rotas', 'Rotas_Operacao_Checklist', 'avisos_diarios_checklist'];
-      const results = await Promise.all(listsToExplore.map(async (listName) => {
-        try {
-          const list = await findListByIdOrName(siteId, listName, token);
-          const columnsResponse = await graphFetch(`/sites/${siteId}/lists/${list.id}/columns`, token);
-          return { list: { id: list.id, displayName: list.displayName, webUrl: list.webUrl }, columns: columnsResponse.value || [], error: null };
-        } catch (e: any) {
-          return { list: { displayName: listName, id: listName, webUrl: '#' }, columns: [], error: e.message };
-        }
-      }));
-      return results;
-    } catch (e) { return []; }
-  },
-
   async getTasks(token: string): Promise<SPTask[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -148,7 +115,7 @@ export const SharePointService = {
           Categoria: item.fields[resolveFieldName(mapping, 'Categoria')] || "Geral",
           Horario: item.fields[resolveFieldName(mapping, 'Horario')] || "--:--",
           Ativa: item.fields[resolveFieldName(mapping, 'Ativa')] !== false,
-          Ordem: Number(item.fields[resolveFieldName(mapping, 'Ordem')]) || 999
+          Ordem: Number(item.fields.Ordem) || 999
         })).sort((a: any, b: any) => a.Ordem - b.Ordem);
     } catch (e) { return []; }
   },
@@ -265,7 +232,6 @@ export const SharePointService = {
     } catch (e) { return []; }
   },
 
-  // FIX: Explicitly return RouteConfig[] instead of any[] to satisfy TypeScript in the component.
   async getRouteConfigs(token: string, userEmail: string): Promise<RouteConfig[]> {
     try {
         const siteId = await getResolvedSiteId(token);
@@ -310,7 +276,22 @@ export const SharePointService = {
       return (data.value || []).map((item: any) => {
         const f = item.fields;
         return {
-          id: String(item.id), semana: f[resolveFieldName(mapping, 'Semana')] || "", rota: f.Title || "", data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "", inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", motorista: f[resolveFieldName(mapping, 'Motorista')] || "", placa: f[resolveFieldName(mapping, 'Placa')] || "", saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", observacao: f[resolveFieldName(mapping, 'Observacao')] || "", statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", operacao: f[resolveFieldName(mapping, 'Operacao')] || "", statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "OK", createdAt: f.Created || new Date().toISOString()
+          id: String(item.id), 
+          semana: f[resolveFieldName(mapping, 'Semana')] || "", 
+          rota: f.Title || "", 
+          data: f[resolveFieldName(mapping, 'DataOperacao')] ? f[resolveFieldName(mapping, 'DataOperacao')].split('T')[0] : "", 
+          inicio: f[resolveFieldName(mapping, 'HorarioInicio')] || "00:00:00", 
+          motorista: f[resolveFieldName(mapping, 'Motorista')] || "", 
+          placa: f[resolveFieldName(mapping, 'Placa')] || "", 
+          saida: f[resolveFieldName(mapping, 'HorarioSaida')] || "00:00:00", 
+          motivo: f[resolveFieldName(mapping, 'MotivoAtraso')] || "", 
+          observacao: f[resolveFieldName(mapping, 'Observacao')] || "", 
+          statusGeral: f[resolveFieldName(mapping, 'StatusGeral')] || "OK", 
+          aviso: f[resolveFieldName(mapping, 'Aviso')] || "NÃO", 
+          operacao: f[resolveFieldName(mapping, 'Operacao')] || "", 
+          statusOp: f[resolveFieldName(mapping, 'StatusOp')] || "OK", 
+          tempo: f[resolveFieldName(mapping, 'TempGab')] || f[resolveFieldName(mapping, 'TempoGap')] || "OK", 
+          createdAt: f.Created || new Date().toISOString()
         };
       });
     } catch (e) { return []; }
@@ -319,21 +300,23 @@ export const SharePointService = {
   async getArchivedDepartures(token: string, operation: string | null, startDate: string, endDate: string): Promise<RouteDeparture[]> {
     try {
       const siteId = await getResolvedSiteId(token);
+      // History List ID provided by User: {856bf9d5-6081-4360-bcad-e771cbabfda8}
       const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
       const { mapping } = await getListColumnMapping(siteId, historyListId, token);
       
       const colData = resolveFieldName(mapping, 'DataOperacao');
       const colOp = resolveFieldName(mapping, 'Operacao');
       
+      // SharePoint filters on dates work best with YYYY-MM-DDT00:00:00Z format in Graph API
       let filter = `fields/${colData} ge '${startDate}T00:00:00Z' and fields/${colData} le '${endDate}T23:59:59Z'`;
       if (operation) {
           filter += ` and fields/${colOp} eq '${operation}'`;
       }
 
-      console.log(`[ARCHIVE_QUERY] Filter: ${filter}`);
+      console.log(`[ARCHIVE_QUERY] URL: /sites/${siteId}/lists/${historyListId}/items Filter: ${filter}`);
       const data = await graphFetch(`/sites/${siteId}/lists/${historyListId}/items?expand=fields&$filter=${filter}&$top=999`, token);
       
-      return (data.value || []).map((item: any) => {
+      const results = (data.value || []).map((item: any) => {
         const f = item.fields;
         return {
           id: String(item.id), 
@@ -354,9 +337,12 @@ export const SharePointService = {
           createdAt: f.Created || new Date().toISOString()
         };
       });
+
+      console.log(`[ARCHIVE_QUERY] Search success. Found ${results.length} records.`);
+      return results;
     } catch (e: any) {
-        console.error("[ARCHIVE_FETCH_ERROR]", e.message);
-        return [];
+        console.error("[ARCHIVE_FETCH_ERROR] Error fetching archived data:", e.message);
+        throw e;
     }
   },
 
@@ -384,7 +370,7 @@ export const SharePointService = {
   },
 
   async moveDeparturesToHistory(token: string, items: RouteDeparture[]): Promise<{ success: number, failed: number, lastError?: string }> {
-    console.log(`[ARCHIVE_START] Iniciando migração de ${items.length} itens.`);
+    console.log(`[ARCHIVE_START] Starting migration of ${items.length} items to permanent history.`);
     const siteId = await getResolvedSiteId(token);
     const sourceList = await findListByIdOrName(siteId, 'Dados_Saida_de_rotas', token);
     const historyListId = "856bf9d5-6081-4360-bcad-e771cbabfda8";
@@ -403,20 +389,17 @@ export const SharePointService = {
             if (postRes && postRes.id) {
                 await graphFetch(`/sites/${siteId}/lists/${sourceList.id}/items/${item.id}`, token, { method: 'DELETE' });
                 successCount++;
-            } else { failedCount++; lastErrorMessage = "Sem confirmação ID."; }
+            } else { failedCount++; lastErrorMessage = "Failed to confirm archived ID."; }
         } catch (err: any) { failedCount++; lastErrorMessage = err.message; }
     }
     return { success: successCount, failed: failedCount, lastError: lastErrorMessage };
   },
 
-  // MÉTODOS PARA AVISOS DIÁRIOS
   async addDailyWarning(token: string, warning: Omit<DailyWarning, 'id' | 'visualizado'>): Promise<void> {
     const siteId = await getResolvedSiteId(token);
     const list = await findListByIdOrName(siteId, 'avisos_diarios_checklist', token);
     const { mapping, internalNames } = await getListColumnMapping(siteId, list.id, token);
     
-    // Mapeamento manual de segurança e conversão para strings (coluna Texto no SharePoint)
-    // FIX: Usando warning.dataOcorrencia + T12:00:00Z para evitar erro de fuso
     const raw: any = {
         Title: warning.operacao || 'SEM OPERACAO',
         celula: warning.celula,
@@ -437,8 +420,6 @@ export const SharePointService = {
     });
 
     if (!fields['Title']) fields['Title'] = raw.Title;
-
-    console.log('[DEBUG WARNING] Final Payload Fields:', JSON.stringify(fields, null, 2));
 
     try {
         await graphFetch(`/sites/${siteId}/lists/${list.id}/items`, token, { 
@@ -463,7 +444,6 @@ export const SharePointService = {
         const descCol = resolveFieldName(mapping, 'descricao');
         const dataCol = resolveFieldName(mapping, 'data_referencia');
 
-        // FIX: Mantemos o filtro apenas em visualizado e celula para garantir que avisos não lidos apareçam sempre
         const filter = `fields/${celulaCol} eq '${userEmail.trim()}' and fields/${visualizadoCol} eq 'false'`;
         const data = await graphFetch(`/sites/${siteId}/lists/${list.id}/items?expand=fields&$filter=${filter}`, token);
         
@@ -493,5 +473,48 @@ export const SharePointService = {
     
     const fields: any = { [visualizadoCol]: "true" }; 
     await graphFetch(`/sites/${siteId}/lists/${list.id}/items/${id}/fields`, token, { method: 'PATCH', body: JSON.stringify(fields) });
+  },
+
+  // Added missing method for SharePointExplorer component to view list and column metadata.
+  async getAllListsMetadata(token: string): Promise<any[]> {
+    const siteId = await getResolvedSiteId(token);
+    const results: any[] = [];
+    
+    const listsToQuery = [
+      'Tarefas_Checklist',
+      'Operacoes_Checklist',
+      'Status_Checklist',
+      'Historico_checklist_web',
+      'Dados_Saida_de_rotas',
+      'Rotas_Operacao_Checklist',
+      'CONFIG_SAIDA_DE_ROTAS',
+      'Usuarios_cco',
+      'avisos_diarios_checklist',
+      '856bf9d5-6081-4360-bcad-e771cbabfda8'
+    ];
+
+    for (const listName of listsToQuery) {
+      try {
+        const list = await findListByIdOrName(siteId, listName, token);
+        const columns = await graphFetch(`/sites/${siteId}/lists/${list.id}/columns`, token);
+        results.push({
+          list: {
+            id: list.id,
+            displayName: list.displayName,
+            webUrl: list.webUrl
+          },
+          columns: columns.value || [],
+          error: false
+        });
+      } catch (err: any) {
+        results.push({
+          list: { displayName: listName },
+          columns: [],
+          error: true,
+          errorMessage: err.message
+        });
+      }
+    }
+    return results;
   }
 };

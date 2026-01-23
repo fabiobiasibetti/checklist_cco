@@ -328,24 +328,20 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
   const handleSearchArchive = async () => {
     setIsSearchingArchive(true);
     try {
-        console.log('[SEARCH_ARCHIVE] Fetching with:', { histStart, histEnd });
+        console.log('[SEARCH_ARCHIVE] Requesting history from SharePoint list {856bf9d5-6081-4360-bcad-e771cbabfda8}...');
         const results = await SharePointService.getArchivedDepartures(getAccessToken(), null, histStart, histEnd);
-        console.log('[SEARCH_ARCHIVE] Raw results:', results);
-        console.log('[SEARCH_ARCHIVE] User configs:', userConfigs);
+        console.log('[SEARCH_ARCHIVE] Results received:', results.length);
         
         const myOps = new Set(userConfigs.map(c => c.operacao));
-        console.log('[SEARCH_ARCHIVE] My operations filter:', Array.from(myOps));
-        
-        // Se myOps estiver vazio, não filtra nada para não bloquear o usuário caso configs falhem
+        // If myOps is empty, show everything for the user to avoid blockage if config loading is slow
         const filtered = results && results.length > 0 
           ? results.filter(r => !myOps.size || myOps.has(r.operacao))
           : [];
-        console.log('[SEARCH_ARCHIVE] Filtered results:', filtered);
         
         setArchivedResults(filtered);
     } catch (err: any) { 
-        console.error('[SEARCH_ARCHIVE] Error:', err);
-        alert("Erro na busca: " + (err?.message || "Erro desconhecido")); 
+        console.error('[SEARCH_ARCHIVE] Error during search:', err);
+        alert("Erro na busca: " + (err?.message || "Erro desconhecido ao acessar o SharePoint. Verifique se você tem permissão na lista de histórico.")); 
     } finally { 
         setIsSearchingArchive(false); 
     }
@@ -554,7 +550,7 @@ const RouteDepartureView: React.FC<{ currentUser: User }> = ({ currentUser }) =>
               <div className="bg-white dark:bg-slate-900 border dark:border-slate-800 rounded-[2.5rem] shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
                   <div className="bg-[#1e293b] p-6 flex justify-between items-center text-white"><div className="flex items-center gap-4"><Database size={24} /><h3 className="font-black uppercase tracking-widest text-base">Histórico Definitivo</h3></div><button onClick={() => setIsHistoryModalOpen(false)}><X size={28} /></button></div>
                   <div className="p-6 bg-slate-50 dark:bg-slate-900 border-b dark:border-slate-800 grid grid-cols-3 gap-4"><input type="date" value={histStart} onChange={e => setHistStart(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" /><input type="date" value={histEnd} onChange={e => setHistEnd(e.target.value)} className="p-3 border dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-[11px] font-bold outline-none dark:text-white" /><button onClick={handleSearchArchive} disabled={isSearchingArchive} className="py-3 bg-primary-600 text-white font-black uppercase text-[11px] rounded-xl flex items-center justify-center gap-2 hover:bg-primary-700 shadow-lg">{isSearchingArchive ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} BUSCAR</button></div>
-                  <div className="flex-1 overflow-auto p-4 bg-slate-50 dark:bg-slate-950">{archivedResults.length > 0 ? ( <table className="w-full border-collapse text-[10px]"><thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase"><tr><th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Rota</th><th className="p-2 border border-slate-300 text-center">Data</th><th className="p-2 border border-slate-300 text-center">Saída</th><th className="p-2 border border-slate-300 text-left">Motivo</th><th className="p-2 border border-slate-300 text-center">OP</th></tr></thead><tbody>{archivedResults.map((r, i) => (<tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800"><td className="p-2 font-bold text-primary-700">{r.rota}</td><td className="p-2 text-center">{r.data}</td><td className="p-2 text-center font-mono">{r.saida}</td><td className="p-2">{r.motivo || "---"}</td><td className="p-2 text-center font-black">{r.operacao}</td></tr>))}</tbody></table> ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 italic font-bold">Nenhum dado retornado para este período</div>}</div>
+                  <div className="flex-1 overflow-auto p-4 bg-slate-50 dark:bg-slate-950">{archivedResults.length > 0 ? ( <table className="w-full border-collapse text-[10px]"><thead className="sticky top-0 bg-slate-200 dark:bg-slate-800 text-slate-600 font-black uppercase"><tr><th className="p-2 border border-slate-300 dark:border-slate-700 text-left">Rota</th><th className="p-2 border border-slate-300 text-center">Data</th><th className="p-2 border border-slate-300 text-center">Saída</th><th className="p-2 border border-slate-300 text-left">Motivo</th><th className="p-2 border border-slate-300 text-center">OP</th></tr></thead><tbody>{archivedResults.map((r, i) => (<tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-200 dark:border-slate-800"><td className="p-2 font-bold text-primary-700">{r.rota}</td><td className="p-2 text-center">{r.data}</td><td className="p-2 text-center font-mono">{r.saida}</td><td className="p-2">{r.motivo || "---"}</td><td className="p-2 text-center font-black">{r.operacao}</td></tr>))}</tbody></table> ) : <div className="h-full flex flex-col items-center justify-center text-slate-400 italic font-bold">{isSearchingArchive ? "Buscando..." : "Nenhum dado retornado para este período"}</div>}</div>
               </div>
           </div>
       )}
